@@ -1,109 +1,97 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 
-from typing import Any, Optional, Tuple
+from typing import Any, Dict, Tuple
 
-from bioio_base.dimensions import Dimensions
-from bioio_base.reader import Reader as BaseReader
-
+import nd2
 import xarray as xr
+from bioio_base import constants, exceptions
+from bioio_base import io as io_utils
+from bioio_base.reader import Reader as BaseReader
+from bioio_base.types import PathLike, PhysicalPixelSizes
+from fsspec.implementations.local import LocalFileSystem
 from fsspec.spec import AbstractFileSystem
 
 ###############################################################################
 
 
 class Reader(BaseReader):
-    """
-    The main class of each reader plugin. This class is subclass
-    of the abstract class reader (BaseReader) in bioio-base.
+    """Read NIS-Elements files using the Nikon nd2 SDK.
+
+    This reader requires `nd2` to be installed in the environment.
 
     Parameters
     ----------
-    image: Any
-        Some type of object to read and follow the Reader specification.
+    image : Path or str
+        path to file
     fs_kwargs: Dict[str, Any]
         Any specific keyword arguments to pass down to the fsspec created filesystem.
         Default: {}
 
-    Notes
-    -----
-    It is up to the implementer of the Reader to decide which types they would like to
-    accept (certain readers may not support buffers for example).
-
+    Raises
+    ------
+    exceptions.UnsupportedFileFormatError
+        If the file is not supported by ND2.
     """
-    _xarray_dask_data: Optional["xr.DataArray"] = None
-    _xarray_data: Optional["xr.DataArray"] = None
-    _mosaic_xarray_dask_data: Optional["xr.DataArray"] = None
-    _mosaic_xarray_data: Optional["xr.DataArray"] = None
-    _dims: Optional[Dimensions] = None
-    _metadata: Optional[Any] = None
-    _scenes: Optional[Tuple[str, ...]] = None
-    _current_scene_index: int = 0
-    # Do not provide default value because
-    # they may not need to be used by your reader (i.e. input param is an array)
-    _fs: "AbstractFileSystem"
-    _path: str
-
-    # Required Methods
-
-    def __init__(image: Any, **kwargs: Any):
-        """
-        Store / cache certain parameters required for later reading.
-
-        Try not to read the image into memory here.
-        """
-        raise NotImplementedError()
 
     @staticmethod
-    def _is_supported_image(fs: "AbstractFileSystem", path: str, **kwargs: Any) -> bool:
-        """
-        Perform a check to determine if the object(s) or path(s) provided as
-        parameters are supported by this reader.
-        """
-        raise NotImplementedError()
+    def _is_supported_image(fs: AbstractFileSystem, path: str, **kwargs: Any) -> bool:
+        return nd2.is_supported_file(path, fs.open)
+
+    def __init__(self, image: PathLike, fs_kwargs: Dict[str, Any] = {}):
+        self._fs, self._path = io_utils.pathlike_to_fs(
+            image,
+            enforce_exists=True,
+            fs_kwargs=fs_kwargs,
+        )
+        # Catch non-local file system
+        if not isinstance(self._fs, LocalFileSystem):
+            raise ValueError(
+                f"Cannot read ND2 from non-local file system. "
+                f"Received URI: {self._path}, which points to {type(self._fs)}."
+            )
+
+        if not self._is_supported_image(self._fs, self._path):
+            raise exceptions.UnsupportedFileFormatError(
+                self.__class__.__name__, self._path
+            )
 
     @property
     def scenes(self) -> Tuple[str, ...]:
-        """
-        Return the list of available scenes for the file using the
-        cached parameters stored to the object in the __init__.
-        """
-        raise NotImplementedError()
+        with nd2.ND2File(self._path) as rdr:
+            return tuple(rdr._position_names())
 
-    def _read_delayed(self) -> "xr.DataArray":
-        """
-        Return an xarray DataArray filled with a delayed dask array, coordinate planes,
-        and any metadata stored in the attrs.
+    def _read_delayed(self) -> xr.DataArray:
+        return self._xarr_reformat(delayed=True)
 
-        Metadata should be labelled with one of the bioio-base constants.
-        """
-        raise NotImplementedError()
+    def _read_immediate(self) -> xr.DataArray:
+        return self._xarr_reformat(delayed=False)
 
-    def _read_immediate(self) -> "xr.DataArray":
-        """
-        Return an xarray DataArray filled with an in-memory numpy ndarray,
-        coordinate planes, and any metadata stored in the attrs.
+    def _xarr_reformat(self, delayed: bool) -> xr.DataArray:
+        with nd2.ND2File(self._path) as rdr:
+            xarr = rdr.to_xarray(
+                delayed=delayed, squeeze=False, position=self.current_scene_index
+            )
+            xarr.attrs[constants.METADATA_UNPROCESSED] = xarr.attrs.pop("metadata")
+            if self.current_scene_index is not None:
+                xarr.attrs[constants.METADATA_UNPROCESSED][
+                    "frame"
+                ] = rdr.frame_metadata(self.current_scene_index)
+        return xarr.isel({nd2.AXIS.POSITION: 0}, missing_dims="ignore")
 
-        Metadata should be labelled with one of the bioio-base constants.
+    @property
+    def physical_pixel_sizes(self) -> PhysicalPixelSizes:
         """
-        raise NotImplementedError()
+        Returns
+        -------
+        sizes: PhysicalPixelSizes
+            Using available metadata, the floats representing physical pixel sizes for
+            dimensions Z, Y, and X.
 
-    # Optional Methods
-
-    def _get_stitched_dask_mosaic(self) -> "xr.DataArray":
+        Notes
+        -----
+        We currently do not handle unit attachment to these values. Please see the file
+        metadata for unit information.
         """
-        If your file returns an `M` dimension for "Mosiac Tile",
-        this function should stitch and return the stitched data as
-        an xarray DataArray both operating against the original delayed array
-        and returning a delayed array.
-        """
-        return super()._get_stitched_dask_mosaic()
-
-    def _get_stitched_mosaic(self) -> "xr.DataArray":
-        """
-        If your file returns an `M` dimension for "Mosiac Tile",
-        this function should stitch and return the stitched data as
-        an xarray DataArray both operating against the original in-memory array
-        and returning a in-memory array.
-        """
-        return super()._get_stitched_mosaic()
+        with nd2.ND2File(self._path) as rdr:
+            return PhysicalPixelSizes(*rdr.voxel_size()[::-1])
