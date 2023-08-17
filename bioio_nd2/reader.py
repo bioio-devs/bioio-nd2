@@ -5,17 +5,14 @@ from typing import Any, Dict, Tuple
 
 import nd2
 import xarray as xr
-from bioio_base import constants, exceptions
-from bioio_base import io as io_utils
-from bioio_base.reader import Reader as BaseReader
-from bioio_base.types import PathLike, PhysicalPixelSizes
+from bioio_base import constants, exceptions, io, reader, types
 from fsspec.implementations.local import LocalFileSystem
 from fsspec.spec import AbstractFileSystem
 
 ###############################################################################
 
 
-class Reader(BaseReader):
+class Reader(reader.Reader):
     """Read NIS-Elements files using the Nikon nd2 SDK.
 
     This reader requires `nd2` to be installed in the environment.
@@ -38,8 +35,8 @@ class Reader(BaseReader):
     def _is_supported_image(fs: AbstractFileSystem, path: str, **kwargs: Any) -> bool:
         return nd2.is_supported_file(path, fs.open)
 
-    def __init__(self, image: PathLike, fs_kwargs: Dict[str, Any] = {}):
-        self._fs, self._path = io_utils.pathlike_to_fs(
+    def __init__(self, image: types.PathLike, fs_kwargs: Dict[str, Any] = {}):
+        self._fs, self._path = io.pathlike_to_fs(
             image,
             enforce_exists=True,
             fs_kwargs=fs_kwargs,
@@ -80,7 +77,7 @@ class Reader(BaseReader):
         return xarr.isel({nd2.AXIS.POSITION: 0}, missing_dims="ignore")
 
     @property
-    def physical_pixel_sizes(self) -> PhysicalPixelSizes:
+    def physical_pixel_sizes(self) -> types.PhysicalPixelSizes:
         """
         Returns
         -------
@@ -94,4 +91,4 @@ class Reader(BaseReader):
         metadata for unit information.
         """
         with nd2.ND2File(self._path) as rdr:
-            return PhysicalPixelSizes(*rdr.voxel_size()[::-1])
+            return types.PhysicalPixelSizes(*rdr.voxel_size()[::-1])
