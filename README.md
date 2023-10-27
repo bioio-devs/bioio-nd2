@@ -1,7 +1,7 @@
 # bioio-nd2
 
-[![Build Status](https://github.com/bioio-devs/bioio-nd2/workflows/CI/badge.svg)](https://github.com/bioio-devs/bioio-nd2/actions)
-[![Documentation](https://github.com/bioio-devs/bioio-nd2/workflows/Documentation/badge.svg)](https://bioio-devs.github.io/bioio-nd2)
+[![Build Status](https://github.com/bioio-devs/bioio-nd2/actions/workflows/ci.yml/badge.svg)](https://github.com/bioio-devs/bioio-nd2/actions)
+[![Documentation](https://github.com/bioio-devs/bioio-nd2/actions/workflows/docs.yml/badge.svg)](https://bioio-devs.github.io/bioio-nd2)
 
 A BioIO reader plugin for reading ND2 images.
 
