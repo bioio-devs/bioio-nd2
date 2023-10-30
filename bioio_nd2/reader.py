@@ -8,6 +8,7 @@ import xarray as xr
 from bioio_base import constants, exceptions, io, reader, types
 from fsspec.implementations.local import LocalFileSystem
 from fsspec.spec import AbstractFileSystem
+from ome_types import OME
 
 ###############################################################################
 
@@ -74,6 +75,14 @@ class Reader(reader.Reader):
                 xarr.attrs[constants.METADATA_UNPROCESSED][
                     "frame"
                 ] = rdr.frame_metadata(self.current_scene_index)
+
+            # include OME metadata as attrs of returned xarray.DataArray if possible
+            # (not possible with `nd2` version < 0.7.0; see PR #521)
+            try:
+                xarr.attrs[constants.METADATA_PROCESSED] = self.ome_metadata
+            except NotImplementedError:
+                pass
+
         return xarr.isel({nd2.AXIS.POSITION: 0}, missing_dims="ignore")
 
     @property
@@ -92,3 +101,24 @@ class Reader(reader.Reader):
         """
         with nd2.ND2File(self._path) as rdr:
             return types.PhysicalPixelSizes(*rdr.voxel_size()[::-1])
+
+    @property
+    def ome_metadata(self) -> OME:
+        """Return OME metadata.
+
+        Returns
+        -------
+        metadata: OME
+            The original metadata transformed into the OME specfication.
+            This likely isn't a complete transformation but is guarenteed to
+            be a valid transformation.
+
+        Raises
+        ------
+        NotImplementedError
+            No metadata transformer available.
+        """
+        if hasattr(nd2.ND2File, "ome_metadata"):
+            with nd2.ND2File(self._path) as rdr:
+                return rdr.ome_metadata()
+        raise NotImplementedError()
