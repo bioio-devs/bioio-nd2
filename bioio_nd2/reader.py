@@ -59,8 +59,9 @@ class Reader(reader.Reader):
 
     @property
     def scenes(self) -> Tuple[str, ...]:
-        with nd2.ND2File(self._path) as rdr:
-            return tuple(rdr._position_names())
+        with self._fs.open(self._path, "rb") as f:
+            with nd2.ND2File(f) as rdr:
+                return tuple(rdr._position_names())
 
     def _read_delayed(self) -> xr.DataArray:
         return self._xarr_reformat(delayed=True)
@@ -69,22 +70,23 @@ class Reader(reader.Reader):
         return self._xarr_reformat(delayed=False)
 
     def _xarr_reformat(self, delayed: bool) -> xr.DataArray:
-        with nd2.ND2File(self._path) as rdr:
-            xarr = rdr.to_xarray(
-                delayed=delayed, squeeze=False, position=self.current_scene_index
-            )
-            xarr.attrs[constants.METADATA_UNPROCESSED] = xarr.attrs.pop("metadata")
-            if self.current_scene_index is not None:
-                xarr.attrs[constants.METADATA_UNPROCESSED][
-                    "frame"
-                ] = rdr.frame_metadata(self.current_scene_index)
+        with self._fs.open(self._path, "rb") as f:
+            with nd2.ND2File(f) as rdr:
+                xarr = rdr.to_xarray(
+                    delayed=delayed, squeeze=False, position=self.current_scene_index
+                )
+                xarr.attrs[constants.METADATA_UNPROCESSED] = xarr.attrs.pop("metadata")
+                if self.current_scene_index is not None:
+                    xarr.attrs[constants.METADATA_UNPROCESSED][
+                        "frame"
+                    ] = rdr.frame_metadata(self.current_scene_index)
 
-            # include OME metadata as attrs of returned xarray.DataArray if possible
-            # (not possible with `nd2` version < 0.7.0; see PR #521)
-            try:
-                xarr.attrs[constants.METADATA_PROCESSED] = self.ome_metadata
-            except NotImplementedError:
-                pass
+                # include OME metadata as attrs of returned xarray.DataArray if possible
+                # (not possible with `nd2` version < 0.7.0; see PR #521)
+                try:
+                    xarr.attrs[constants.METADATA_PROCESSED] = self.ome_metadata
+                except NotImplementedError:
+                    pass
 
         return xarr.isel({nd2.AXIS.POSITION: 0}, missing_dims="ignore")
 
@@ -102,8 +104,9 @@ class Reader(reader.Reader):
         We currently do not handle unit attachment to these values. Please see the file
         metadata for unit information.
         """
-        with nd2.ND2File(self._path) as rdr:
-            return types.PhysicalPixelSizes(*rdr.voxel_size()[::-1])
+        with self._fs.open(self._path, "rb") as f:
+            with nd2.ND2File(f) as rdr:
+                return types.PhysicalPixelSizes(*rdr.voxel_size()[::-1])
 
     @property
     def ome_metadata(self) -> OME:
@@ -122,6 +125,7 @@ class Reader(reader.Reader):
             No metadata transformer available.
         """
         if hasattr(nd2.ND2File, "ome_metadata"):
-            with nd2.ND2File(self._path) as rdr:
-                return rdr.ome_metadata()
+            with self._fs.open(self._path, "rb") as f:
+                with nd2.ND2File(f) as rdr:
+                    return rdr.ome_metadata()
         raise NotImplementedError()
