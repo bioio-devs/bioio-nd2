@@ -205,9 +205,13 @@ def test_ome_metadata(filename: str) -> None:
     assert isinstance(img.ome_metadata, OME)
 
 
-def test_frame_metadata() -> None:
+@pytest.mark.parametrize(
+    "cache",
+    [True, False],
+)
+def test_frame_metadata(cache: bool) -> None:
     uri = LOCAL_RESOURCES_DIR / "ND2_dims_rgb_t3p2c2z3x64y64.nd2"
-    rdr = Reader(uri)
+    rdr = Reader("simplecache::" + str(uri) if cache else uri)
     rdr.set_scene(0)
     assert isinstance(
         rdr.xarray_data.attrs["unprocessed"]["frame"], nd2.structures.FrameMetadata
