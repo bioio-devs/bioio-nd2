@@ -6,6 +6,7 @@ from typing import Any, Dict, Tuple
 import nd2
 import xarray as xr
 from bioio_base import constants, exceptions, io, reader, types
+from fsspec.implementations.cached import CachingFileSystem
 from fsspec.implementations.local import LocalFileSystem
 from fsspec.spec import AbstractFileSystem
 from ome_types import OME
@@ -42,8 +43,10 @@ class Reader(reader.Reader):
             enforce_exists=True,
             fs_kwargs=fs_kwargs,
         )
-        # Catch non-local file system
-        if not isinstance(self._fs, LocalFileSystem):
+        # Catch non-local file system and non-caching file system
+        if not isinstance(self._fs, LocalFileSystem) and not isinstance(
+            self._fs, CachingFileSystem
+        ):
             raise ValueError(
                 f"Cannot read ND2 from non-local file system. "
                 f"Received URI: {self._path}, which points to {type(self._fs)}."
