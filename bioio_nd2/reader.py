@@ -35,7 +35,11 @@ class Reader(reader.Reader):
 
     @staticmethod
     def _is_supported_image(fs: AbstractFileSystem, path: str, **kwargs: Any) -> bool:
-        return nd2.is_supported_file(path, fs.open)
+        if nd2.is_supported_file(path, fs.open):
+            return True
+        raise exceptions.UnsupportedFileFormatError(
+            "bioio-nd2", path, "File is not supported by ND2."
+        )
 
     def __init__(self, image: types.PathLike, fs_kwargs: Dict[str, Any] = {}):
         self._fs, self._path = io.pathlike_to_fs(
@@ -52,10 +56,7 @@ class Reader(reader.Reader):
                 f"Received URI: {self._path}, which points to {type(self._fs)}."
             )
 
-        if not self._is_supported_image(self._fs, self._path):
-            raise exceptions.UnsupportedFileFormatError(
-                self.__class__.__name__, self._path
-            )
+        self._is_supported_image(self._fs, self._path)
 
     @property
     def scenes(self) -> Tuple[str, ...]:
