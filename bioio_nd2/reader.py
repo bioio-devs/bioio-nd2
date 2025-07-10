@@ -1,11 +1,13 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 
+import re
 from typing import Any, Dict, Tuple
 
 import nd2
 import xarray as xr
 from bioio_base import constants, exceptions, io, reader, types
+from bioio_base.standard_metadata import StandardMetadata
 from fsspec.implementations.cached import CachingFileSystem
 from fsspec.implementations.local import LocalFileSystem
 from fsspec.spec import AbstractFileSystem
@@ -110,6 +112,19 @@ class Reader(reader.Reader):
                 return types.PhysicalPixelSizes(*rdr.voxel_size()[::-1])
 
     @property
+    def binning(self) -> str | None:
+        """
+        Returns
+        -------
+        binning : str | None
+            Binning value reported by the ND2File metadata, e.g., "1x1".
+        """
+        with self._fs.open(self._path, "rb") as f, nd2.ND2File(f) as rdr:
+            desc = rdr.text_info.get("description", "")
+            match = re.search(r"\bBinning:\s*(\d+x\d+)", desc)
+            return match.group(1) if match else None
+
+    @property
     def ome_metadata(self) -> OME:
         """Return OME metadata.
 
@@ -130,3 +145,17 @@ class Reader(reader.Reader):
                 with nd2.ND2File(f) as rdr:
                     return rdr.ome_metadata()
         raise NotImplementedError()
+
+    @property
+    def standard_metadata(self) -> StandardMetadata:
+        """
+        Return the standard metadata for this reader, updating specific fields.
+
+        This implementation calls the base reader’s standard_metadata property
+        via super() and then assigns the new values.
+        """
+        metadata = super().standard_metadata
+        metadata.binning = self.binning
+        metadata.position_index = self.current_scene_index
+
+        return metadata
