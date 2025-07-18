@@ -16,7 +16,6 @@ jobs:
     - uses: actions/checkout@v4
       with: 
         lfs: true # For test files
-        submodules: "recursive"
     - name: Set up Python
       uses: actions/setup-python@v5
       with:
