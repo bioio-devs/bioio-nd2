@@ -80,9 +80,9 @@ class Reader(reader.Reader):
                 )
                 xarr.attrs[constants.METADATA_UNPROCESSED] = xarr.attrs.pop("metadata")
                 if self.current_scene_index is not None:
-                    xarr.attrs[constants.METADATA_UNPROCESSED][
-                        "frame"
-                    ] = rdr.frame_metadata(self.current_scene_index)
+                    xarr.attrs[constants.METADATA_UNPROCESSED]["frame"] = (
+                        rdr.frame_metadata(self.current_scene_index)
+                    )
 
                 # include OME metadata as attrs of returned xarray.DataArray if possible
                 # (not possible with `nd2` version < 0.7.0; see PR #521)
