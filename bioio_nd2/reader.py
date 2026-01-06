@@ -1,6 +1,7 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 
+import logging
 import re
 from typing import Any, Dict, Tuple
 
@@ -12,6 +13,18 @@ from fsspec.implementations.cached import CachingFileSystem
 from fsspec.implementations.local import LocalFileSystem
 from fsspec.spec import AbstractFileSystem
 from ome_types import OME
+
+from .plates import (
+    WellPosition,
+    extract_position_stage_xy_um,
+    extract_scene_to_position_index,
+    get_plate_geometry_from_nd2,
+    map_scenes_to_wells,
+)
+
+###############################################################################
+
+log = logging.getLogger(__name__)
 
 ###############################################################################
 
@@ -35,6 +48,8 @@ class Reader(reader.Reader):
         If the file is not supported by ND2.
     """
 
+    _scene_to_well_map: Dict[int, WellPosition] | None = None
+
     @staticmethod
     def _is_supported_image(fs: AbstractFileSystem, path: str, **kwargs: Any) -> bool:
         if nd2.is_supported_file(path, fs.open):
@@ -44,6 +59,7 @@ class Reader(reader.Reader):
         )
 
     def __init__(self, image: types.PathLike, fs_kwargs: Dict[str, Any] = {}):
+
         self._fs, self._path = io.pathlike_to_fs(
             image,
             enforce_exists=True,
@@ -147,6 +163,63 @@ class Reader(reader.Reader):
         raise NotImplementedError()
 
     @property
+    def scene_to_well_map(self) -> Dict[int, WellPosition]:
+        """
+        Mapping of absolute scene index -> logical well position.
+        """
+        if self._scene_to_well_map is None:
+            with self._fs.open(self._path, "rb") as f:
+                with nd2.ND2File(f) as rdr:
+                    wells = get_plate_geometry_from_nd2(rdr)
+                    position_xy = extract_position_stage_xy_um(rdr)
+                    scene_to_position = extract_scene_to_position_index(
+                        rdr, num_scenes=len(self.scenes)
+                    )
+
+            self._scene_to_well_map = map_scenes_to_wells(
+                scene_to_position,
+                position_xy,
+                wells,
+            )
+
+        return self._scene_to_well_map
+
+    @property
+    def row(self) -> str | None:
+        """
+        Extracts the well row index from the current scene name.
+
+        Returns
+        -------
+        Optional[str]
+            The row index as a string. Returns None if parsing fails.
+        """
+        try:
+            pos = self.scene_to_well_map.get(self.current_scene_index)
+            return pos.row if pos else None
+        except Exception as exc:
+            log.warning("Failed to extract row: %s", exc, exc_info=True)
+            return None
+
+    @property
+    def column(self) -> str | None:
+        """
+        Extracts the binning setting from the scene metadata.
+
+        Returns
+        -------
+        Optional[str]
+            The binning setting (e.g., "1x1" or "2x2").
+            Returns None if not found or unknown.
+        """
+        try:
+            pos = self.scene_to_well_map.get(self.current_scene_index)
+            return pos.col if pos else None
+        except Exception as exc:
+            log.warning("Failed to extract column: %s", exc, exc_info=True)
+            return None
+
+    @property
     def standard_metadata(self) -> StandardMetadata:
         """
         Return the standard metadata for this reader, updating specific fields.
@@ -155,7 +228,9 @@ class Reader(reader.Reader):
         via super() and then assigns the new values.
         """
         metadata = super().standard_metadata
+        metadata.column = self.column
         metadata.binning = self.binning
         metadata.position_index = self.current_scene_index
+        metadata.row = self.row
 
         return metadata
