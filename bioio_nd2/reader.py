@@ -187,7 +187,7 @@ class Reader(reader.Reader):
     @property
     def row(self) -> str | None:
         """
-        Extracts the well row index from the current scene name.
+        Extracts the well row index from XYPosLoop.
 
         Returns
         -------
@@ -204,13 +204,12 @@ class Reader(reader.Reader):
     @property
     def column(self) -> str | None:
         """
-        Extracts the binning setting from the scene metadata.
+        Extracts the well column index from XYPosLoop.
 
         Returns
         -------
         Optional[str]
-            The binning setting (e.g., "1x1" or "2x2").
-            Returns None if not found or unknown.
+            The column index as a string. Returns None if parsing fails.
         """
         try:
             pos = self.scene_to_well_map.get(self.current_scene_index)
