@@ -1,6 +1,3 @@
-#!/usr/bin/env python
-# -*- coding: utf-8 -*-
-
 import logging
 import re
 from typing import Any, Dict, Tuple
@@ -15,10 +12,11 @@ from fsspec.spec import AbstractFileSystem
 from ome_types import OME
 
 from .plates import (
+    PLATE_96,
+    Plate,
     WellPosition,
     extract_position_stage_xy_um,
     extract_scene_to_position_index,
-    get_plate_geometry_from_nd2,
     map_scenes_to_wells,
 )
 
@@ -48,7 +46,7 @@ class Reader(reader.Reader):
         If the file is not supported by ND2.
     """
 
-    _scene_to_well_map: Dict[int, WellPosition] | None = None
+    _scene_to_well_map: Dict[int, WellPosition | None] | None = None
 
     @staticmethod
     def _is_supported_image(fs: AbstractFileSystem, path: str, **kwargs: Any) -> bool:
@@ -58,7 +56,14 @@ class Reader(reader.Reader):
             "bioio-nd2", path, "File is not supported by ND2."
         )
 
-    def __init__(self, image: types.PathLike, fs_kwargs: Dict[str, Any] = {}):
+    def __init__(
+        self,
+        image: types.PathLike,
+        fs_kwargs: Dict[str, Any] = {},
+        *,
+        plate: Plate | None = None,
+    ):
+        self._plate = plate
 
         self._fs, self._path = io.pathlike_to_fs(
             image,
@@ -162,15 +167,24 @@ class Reader(reader.Reader):
                     return rdr.ome_metadata()
         raise NotImplementedError()
 
-    @property
-    def scene_to_well_map(self) -> Dict[int, WellPosition]:
+    def _get_scene_to_well_map(self) -> Dict[int, WellPosition | None]:
         """
-        Mapping of absolute scene index -> logical well position.
+        Compute and cache the mapping of absolute scene index to logical
+        well position for this image. Defaults to 96-well plate geometry.
         """
         if self._scene_to_well_map is None:
+
+            if self._plate is None:
+                log.warning(
+                    "No plate geometry provided; defaulting to standard 96-well "
+                    "plate geometry (PLATE_96)."
+                )
+                self._plate = PLATE_96
+
             with self._fs.open(self._path, "rb") as f:
                 with nd2.ND2File(f) as rdr:
-                    wells = get_plate_geometry_from_nd2(rdr)
+                    wells = self._plate.generate_wells()
+
                     position_xy = extract_position_stage_xy_um(rdr)
                     scene_to_position = extract_scene_to_position_index(
                         rdr, num_scenes=len(self.scenes)
@@ -180,6 +194,7 @@ class Reader(reader.Reader):
                 scene_to_position,
                 position_xy,
                 wells,
+                plate=self._plate,
             )
 
         return self._scene_to_well_map
@@ -195,7 +210,7 @@ class Reader(reader.Reader):
             The row index as a string. Returns None if parsing fails.
         """
         try:
-            pos = self.scene_to_well_map.get(self.current_scene_index)
+            pos = self._get_scene_to_well_map().get(self.current_scene_index)
             return pos.row if pos else None
         except Exception as exc:
             log.warning("Failed to extract row: %s", exc, exc_info=True)
@@ -212,7 +227,7 @@ class Reader(reader.Reader):
             The column index as a string. Returns None if parsing fails.
         """
         try:
-            pos = self.scene_to_well_map.get(self.current_scene_index)
+            pos = self._get_scene_to_well_map().get(self.current_scene_index)
             return pos.col if pos else None
         except Exception as exc:
             log.warning("Failed to extract column: %s", exc, exc_info=True)
