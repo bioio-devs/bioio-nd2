@@ -12,7 +12,6 @@ from fsspec.spec import AbstractFileSystem
 from ome_types import OME
 
 from .plates import (
-    PLATE_96,
     Plate,
     WellPosition,
     extract_position_stage_xy_um,
@@ -39,7 +38,10 @@ class Reader(reader.Reader):
     fs_kwargs: Dict[str, Any]
         Any specific keyword arguments to pass down to the fsspec created filesystem.
         Default: {}
-
+    plate : Plate | None
+        Plate geometry used to assign scene positions to wells.
+        If None, no well assignment is performed and row/column
+        metadata will be omitted.
     Raises
     ------
     exceptions.UnsupportedFileFormatError
@@ -170,32 +172,33 @@ class Reader(reader.Reader):
     def _get_scene_to_well_map(self) -> Dict[int, WellPosition | None]:
         """
         Compute and cache the mapping of absolute scene index to logical
-        well position for this image. Defaults to 96-well plate geometry.
+        well position for this image.
+
+        If no plate geometry is provided, no mapping is performed and all
+        scenes map to None.
         """
-        if self._scene_to_well_map is None:
+        if self._scene_to_well_map is not None:
+            return self._scene_to_well_map
 
-            if self._plate is None:
-                log.warning(
-                    "No plate geometry provided; defaulting to standard 96-well "
-                    "plate geometry (PLATE_96)."
+        if self._plate is None:
+            self._scene_to_well_map = {i: None for i in range(len(self.scenes))}
+            return self._scene_to_well_map
+
+        with self._fs.open(self._path, "rb") as f:
+            with nd2.ND2File(f) as rdr:
+                wells = self._plate.generate_wells()
+
+                position_xy = extract_position_stage_xy_um(rdr)
+                scene_to_position = extract_scene_to_position_index(
+                    rdr, num_scenes=len(self.scenes)
                 )
-                self._plate = PLATE_96
 
-            with self._fs.open(self._path, "rb") as f:
-                with nd2.ND2File(f) as rdr:
-                    wells = self._plate.generate_wells()
-
-                    position_xy = extract_position_stage_xy_um(rdr)
-                    scene_to_position = extract_scene_to_position_index(
-                        rdr, num_scenes=len(self.scenes)
-                    )
-
-            self._scene_to_well_map = map_scenes_to_wells(
-                scene_to_position,
-                position_xy,
-                wells,
-                plate=self._plate,
-            )
+        self._scene_to_well_map = map_scenes_to_wells(
+            scene_to_position,
+            position_xy,
+            wells,
+            plate=self._plate,
+        )
 
         return self._scene_to_well_map
 

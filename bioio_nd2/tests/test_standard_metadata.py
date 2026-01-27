@@ -4,6 +4,7 @@ from typing import Any
 import pytest
 
 from bioio_nd2 import Reader
+from bioio_nd2.plates import PLATE_96
 
 from .conftest import LOCAL_RESOURCES_DIR
 
@@ -89,7 +90,7 @@ from .conftest import LOCAL_RESOURCES_DIR
 )
 def test_nd2_standard_metadata(filename: str, expected: dict[str, Any]) -> None:
     uri = LOCAL_RESOURCES_DIR / filename
-    reader = Reader(uri)
+    reader = Reader(uri, plate=PLATE_96)
     metadata = reader.standard_metadata.to_dict()
 
     for key, expected_value in expected.items():
@@ -136,7 +137,7 @@ def test_nd2_scene_row_and_column(
     Verify row/column inference from ND2 scene index.
     """
     uri = LOCAL_RESOURCES_DIR / filename
-    reader = Reader(uri)
+    reader = Reader(uri, plate=PLATE_96)
 
     # Explicitly set scene
     reader.set_scene(scene_index)

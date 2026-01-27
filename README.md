@@ -51,16 +51,18 @@ on multi-well plates.
 > ⚠️ If the ND2 file does **not** contain XY position metadata (`XYPosLoop`),
 > no well mapping is performed and `row` / `column` will be `None`.
 
-### Default behavior (96-well plate)
-
-The ND2 reader assumes a **standard 96-well plate geometry** (See [Plates](https://github.com/bioio-devs/bioio-nd2/blob/main/bioio_nd2/plates.py) for specification) and assigns each scene to the nearest well center. Users may define their own plate geometry and pass it to the reader to override these defaults.
-
+A standard 96-well plate geometry is available as PLATE_96
 
 ```python
 from bioio import BioImage
 import bioio_nd2
+from bioio_nd2.plates import PLATE_96
 
-img = BioImage("my_file.nd2", reader=bioio_nd2.Reader)
+img = BioImage(
+    "my_file.nd2",
+    reader=bioio_nd2.Reader,
+    plate=PLATE_96,
+)
 
 img.set_scene(0)
 
