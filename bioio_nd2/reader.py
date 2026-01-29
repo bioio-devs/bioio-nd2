@@ -247,7 +247,6 @@ class Reader(reader.Reader):
         metadata = super().standard_metadata
         metadata.column = self.column
         metadata.binning = self.binning
-        metadata.position_index = self.current_scene_index
         metadata.row = self.row
 
         return metadata
