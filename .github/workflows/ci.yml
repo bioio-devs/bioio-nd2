@@ -33,16 +33,44 @@ jobs:
   
   # Shared test workflow from bioio-base
   test:
-    permissions:
-      id-token: write   # This is required for requesting the JWT
-      contents: read    # This is required for actions/checkout
+    needs: [lint]
     uses: bioio-devs/bioio-base/.github/workflows/shared_test.yml@main
+    with:
+      test_checkout_lfs: true
 
   # Shared lint workflow from bioio-base
   lint:
     uses: bioio-devs/bioio-base/.github/workflows/shared_lint.yml@main
     with:
-      lint_python_version: "3.11"
+      lint_python_version: "3.13"
+
+  # Check package performance
+  benchmark:
+    needs: [lint]
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v6
+      with:
+        lfs: true # For test files
+    - name: Set up Python
+      uses: actions/setup-python@v6
+      with:
+        python-version: "3.13"
+    - uses: extractions/setup-just@v3
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    - name: Install Dependencies
+      run: |
+        python -m pip install --upgrade pip
+        just install
+    - name: Run Performance Benchmark
+      run: just benchmark
+    - name: Upload Performance Results
+      uses: actions/upload-artifact@v6
+      with:
+        path: "output.csv"
+        if-no-files-found: error
 
   # Publish to PyPI if test, lint, and manifest checks passed
   publish:
