@@ -41,8 +41,6 @@ jobs:
   # Shared lint workflow from bioio-base
   lint:
     uses: bioio-devs/bioio-base/.github/workflows/shared_lint.yml@main
-    with:
-      lint_python_version: "3.13"
 
   # Check package performance
   benchmark:
