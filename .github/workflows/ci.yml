@@ -35,8 +35,6 @@ jobs:
   test:
     needs: [lint]
     uses: bioio-devs/bioio-base/.github/workflows/shared_test.yml@main
-    with:
-      test_checkout_lfs: true
 
   # Shared lint workflow from bioio-base
   lint:
