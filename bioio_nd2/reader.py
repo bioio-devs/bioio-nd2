@@ -260,7 +260,7 @@ class Reader(reader.Reader):
                 with nd2.ND2File(fh) as f:
                     ri = f.metadata.channels[0].microscope.immersionRefractiveIndex
 
-                    # 1.33 is the refractive index of water 
+                    # 1.33 is the refractive index of water
                     if ri is not None and abs(float(ri) - 1.333) <= 1e-3:
                         metadata.objective = f"{metadata.objective}W"
 
