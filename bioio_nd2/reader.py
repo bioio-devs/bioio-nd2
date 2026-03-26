@@ -245,8 +245,25 @@ class Reader(reader.Reader):
         via super() and then assigns the new values.
         """
         metadata = super().standard_metadata
+
         metadata.column = self.column
         metadata.binning = self.binning
         metadata.row = self.row
+
+        # ND2 does not currently support immersion parsing into ome object
+        # This can be removed once they do.
+        if not metadata.objective or metadata.objective.strip().endswith("W"):
+            return metadata
+
+        try:
+            with self._fs.open(self._path, "rb") as fh:
+                with nd2.ND2File(fh) as f:
+                    ri = f.metadata.channels[0].microscope.immersionRefractiveIndex
+
+                    if ri is not None and abs(float(ri) - 1.333) <= 1e-3:
+                        metadata.objective = f"{metadata.objective}W"
+
+        except Exception as err:
+            log.warning(f"Failed to patch ND2 objective immersion suffix: {err}")
 
         return metadata
