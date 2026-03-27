@@ -86,6 +86,41 @@ from .conftest import LOCAL_RESOURCES_DIR
                 ),
             },
         ),
+        (
+            "Argo_sphere_water.nd2",
+            {
+                "Binning": "1x1",
+                "Column": None,
+                "Dimensions Present": "CZYX",
+                "Image Size C": 1,
+                "Image Size T": None,
+                "Image Size X": 2048,
+                "Image Size Y": 2048,
+                "Image Size Z": 121,
+                "Imaged By": None,
+                "Imaging Datetime": datetime.datetime(
+                    2026,
+                    3,
+                    10,
+                    16,
+                    0,
+                    17,
+                    893982,
+                    tzinfo=datetime.timezone(
+                        datetime.timedelta(days=-1, seconds=61200), name="PDT"
+                    ),
+                ),
+                "Objective": "60x/1.27Water",
+                "Pixel Size X": 0.108333333333333,
+                "Pixel Size Y": 0.108333333333333,
+                "Pixel Size Z": 0.5,
+                "Position Index": None,
+                "Row": None,
+                "Timelapse": False,
+                "Timelapse Interval": None,
+                "Total Time Duration": datetime.timedelta(microseconds=245184),
+            },
+        ),
     ],
 )
 def test_nd2_standard_metadata(filename: str, expected: dict[str, Any]) -> None:

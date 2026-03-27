@@ -252,7 +252,7 @@ class Reader(reader.Reader):
 
         # ND2 does not currently support immersion parsing into ome object
         # This can be removed once they do.
-        if not metadata.objective or metadata.objective.strip().endswith("W"):
+        if not metadata.objective or metadata.objective.strip().endswith("Water"):
             return metadata
 
         try:
@@ -262,7 +262,7 @@ class Reader(reader.Reader):
 
                     # 1.33 is the refractive index of water
                     if ri is not None and abs(float(ri) - 1.333) <= 1e-3:
-                        metadata.objective = f"{metadata.objective}W"
+                        metadata.objective = f"{metadata.objective}Water"
 
         except Exception as err:
             log.warning(f"Failed to patch ND2 objective immersion suffix: {err}")
