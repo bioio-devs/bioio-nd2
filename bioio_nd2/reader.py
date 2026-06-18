@@ -1,10 +1,14 @@
 import logging
 import re
+from itertools import product
+from numbers import Integral
 from typing import Any, Dict, Tuple
 
 import nd2
+import numpy as np
 import xarray as xr
 from bioio_base import constants, exceptions, io, reader, types
+from bioio_base.dimensions import Dimensions
 from bioio_base.standard_metadata import StandardMetadata
 from fsspec.implementations.cached import CachingFileSystem
 from fsspec.implementations.local import LocalFileSystem
@@ -89,11 +93,197 @@ class Reader(reader.Reader):
             with nd2.ND2File(f) as rdr:
                 return tuple(rdr._position_names())
 
+    @property
+    def shape(self) -> Tuple[int, ...]:
+        return self.dims.shape
+
+    @property
+    def dims(self) -> Dimensions:
+        if self._dims is None:
+            dims, shape = self._read_dims_and_shape()
+            self._dims = Dimensions(dims=dims, shape=shape)
+
+        return self._dims
+
+    def _read_dims_and_shape(self) -> Tuple[Tuple[str, ...], Tuple[int, ...]]:
+        with self._fs.open(self._path, "rb") as f:
+            with nd2.ND2File(f) as rdr:
+                dims, shape = self._dims_and_shape_from_nd2(
+                    rdr,
+                    self.current_scene_index,
+                )
+
+        return tuple(dims), tuple(shape)
+
+    @staticmethod
+    def _dims_and_shape_from_nd2(
+        rdr: nd2.ND2File,
+        position: int | None = None,
+    ) -> Tuple[list[str], list[int]]:
+        dims = list(rdr.sizes)
+        shape = list(rdr.shape)
+        coords = rdr._expand_coords(squeeze=False)
+
+        for missing_dim in set(coords).difference(dims):
+            dims.insert(0, missing_dim)
+            shape.insert(0, len(coords[missing_dim]))
+
+        try:
+            position_index = dims.index(nd2.AXIS.POSITION)
+        except ValueError:
+            if position and position > 0:
+                raise IndexError(
+                    f"Position {position} is out of range. Only 1 position available"
+                )
+        else:
+            if position is not None and position >= shape[position_index]:
+                raise IndexError(
+                    f"Position {position} is out of range. "
+                    f"Only {shape[position_index]} positions available"
+                )
+
+            shape[position_index] = 1
+            dims.pop(position_index)
+            shape.pop(position_index)
+
+        return dims, shape
+
+    @staticmethod
+    def _indices_from_dim_spec(dim_spec: Any, size: int) -> list[int]:
+        dim_range = range(size)
+        if isinstance(dim_spec, Integral):
+            return [dim_range[int(dim_spec)]]
+
+        if isinstance(dim_spec, slice):
+            return list(dim_range[dim_spec])
+
+        if isinstance(dim_spec, range):
+            dim_spec = list(dim_spec)
+
+        if isinstance(dim_spec, tuple):
+            dim_spec = list(dim_spec)
+
+        if isinstance(dim_spec, list):
+            return [dim_range[int(index)] for index in dim_spec]
+
+        raise TypeError(f"Unsupported dimension indexer: {type(dim_spec).__name__}")
+
+    @staticmethod
+    def _local_dim_spec(dim_spec: Any, size: int) -> Any:
+        if isinstance(dim_spec, Integral):
+            return 0
+
+        if isinstance(dim_spec, slice):
+            return slice(None)
+
+        return list(range(size))
+
+    @staticmethod
+    def _reshape_frame_to_dims(
+        frame: np.ndarray,
+        current_dims: list[str],
+        target_dims: list[str],
+        shape_by_dim: Dict[str, int],
+    ) -> np.ndarray:
+        if current_dims:
+            frame = frame.reshape(tuple(shape_by_dim[dim] for dim in current_dims))
+        else:
+            frame = frame.reshape(())
+
+        for dim in target_dims:
+            if dim not in current_dims:
+                frame = np.expand_dims(frame, axis=0)
+                current_dims.insert(0, dim)
+
+        if current_dims != target_dims:
+            frame = frame.transpose([current_dims.index(dim) for dim in target_dims])
+
+        return frame
+
     def _read_delayed(self) -> xr.DataArray:
         return self._xarr_reformat(delayed=True)
 
     def _read_immediate(self) -> xr.DataArray:
         return self._xarr_reformat(delayed=False)
+
+    def _read_indexed(self, given_dims: str, dim_specs: list) -> np.ndarray:
+        position = self.current_scene_index
+        with self._fs.open(self._path, "rb") as f:
+            with nd2.ND2File(f) as rdr:
+                dims, shape = self._dims_and_shape_from_nd2(
+                    rdr,
+                    position,
+                )
+                shape_by_dim = dict(zip(dims, shape))
+                frame_coord_dims = nd2.AXIS.frame_coords()
+                coord_dims = [
+                    dim for dim in rdr.sizes if dim not in frame_coord_dims
+                ]
+                frame_dims = [dim for dim in given_dims if dim in frame_coord_dims]
+                current_frame_dims = [
+                    dim for dim in rdr.sizes if dim in frame_coord_dims
+                ]
+
+                selected_indices = {
+                    dim: self._indices_from_dim_spec(
+                        dim_specs[dim_index],
+                        shape_by_dim[dim],
+                    )
+                    for dim_index, dim in enumerate(given_dims)
+                }
+                subset_shape = tuple(
+                    len(selected_indices[dim]) for dim in given_dims
+                )
+                subset = np.empty(subset_shape, dtype=rdr.dtype)
+                local_indexer = tuple(
+                    self._local_dim_spec(dim_specs[dim_index], subset_shape[dim_index])
+                    for dim_index in range(len(given_dims))
+                )
+
+                if 0 in subset_shape:
+                    return subset[local_indexer]
+
+                coord_choices = []
+                for dim in coord_dims:
+                    if dim == nd2.AXIS.POSITION:
+                        coord_choices.append([(0, position)])
+                    else:
+                        coord_choices.append(list(enumerate(selected_indices[dim])))
+
+                for coord_selection in product(*coord_choices):
+                    coord_indexes = tuple(index for _, index in coord_selection)
+                    if not coord_dims:
+                        frame_index = 0
+                    else:
+                        frame_index = rdr._seq_index_from_coords(coord_indexes)
+
+                    frame = np.asarray(rdr.read_frame(frame_index))
+                    frame = self._reshape_frame_to_dims(
+                        frame,
+                        current_frame_dims.copy(),
+                        frame_dims,
+                        shape_by_dim,
+                    )
+
+                    for frame_axis, dim in enumerate(frame_dims):
+                        frame = np.take(
+                            frame,
+                            selected_indices[dim],
+                            axis=frame_axis,
+                        )
+
+                    coord_ordinals = {
+                        dim: ordinal
+                        for dim, (ordinal, _) in zip(coord_dims, coord_selection)
+                        if dim != nd2.AXIS.POSITION
+                    }
+                    subset_index = tuple(
+                        coord_ordinals[dim] if dim in coord_ordinals else slice(None)
+                        for dim in given_dims
+                    )
+                    subset[subset_index] = frame
+
+        return subset[local_indexer]
 
     def _xarr_reformat(self, delayed: bool) -> xr.DataArray:
         with self._fs.open(self._path, "rb") as f:
