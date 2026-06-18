@@ -272,7 +272,7 @@ def test_read_indexed_reads_only_requested_nd2_frames(
     def fail_delayed_read() -> xr.DataArray:
         raise AssertionError("_read_delayed should not be used for indexed reads")
 
-    rdr._read_delayed = fail_delayed_read
+    monkeypatch.setattr(rdr, "_read_delayed", fail_delayed_read)
 
     actual = rdr._read_indexed(
         "TCYX",
@@ -445,7 +445,7 @@ def test_dims_and_shape_use_nd2_metadata_without_xarray_dask_data(
     def fail_delayed_read() -> xr.DataArray:
         raise AssertionError("_read_delayed should not be used for dims or shape")
 
-    rdr._read_delayed = fail_delayed_read
+    monkeypatch.setattr(rdr, "_read_delayed", fail_delayed_read)
 
     assert rdr.dims.order == "CYX"
     assert rdr.shape == (1, 4, 5)

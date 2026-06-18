@@ -2,7 +2,7 @@ import logging
 import re
 from itertools import product
 from numbers import Integral
-from typing import Any, Dict, Tuple
+from typing import Any, Dict, Optional, Tuple
 
 import nd2
 import numpy as np
@@ -53,6 +53,9 @@ class Reader(reader.Reader):
     """
 
     _scene_to_well_map: Dict[int, WellPosition | None] | None = None
+    # must match the bioio-base Reader's signature for the `dims` property,
+    # which is cached here for mypy type checking reasons
+    _dims: Optional[Dimensions] = None
 
     @staticmethod
     def _is_supported_image(fs: AbstractFileSystem, path: str, **kwargs: Any) -> bool:
@@ -216,9 +219,7 @@ class Reader(reader.Reader):
                 )
                 shape_by_dim = dict(zip(dims, shape))
                 frame_coord_dims = nd2.AXIS.frame_coords()
-                coord_dims = [
-                    dim for dim in rdr.sizes if dim not in frame_coord_dims
-                ]
+                coord_dims = [dim for dim in rdr.sizes if dim not in frame_coord_dims]
                 frame_dims = [dim for dim in given_dims if dim in frame_coord_dims]
                 current_frame_dims = [
                     dim for dim in rdr.sizes if dim in frame_coord_dims
@@ -231,9 +232,7 @@ class Reader(reader.Reader):
                     )
                     for dim_index, dim in enumerate(given_dims)
                 }
-                subset_shape = tuple(
-                    len(selected_indices[dim]) for dim in given_dims
-                )
+                subset_shape = tuple(len(selected_indices[dim]) for dim in given_dims)
                 subset = np.empty(subset_shape, dtype=rdr.dtype)
                 local_indexer = tuple(
                     self._local_dim_spec(dim_specs[dim_index], subset_shape[dim_index])
