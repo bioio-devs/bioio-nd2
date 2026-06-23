@@ -13,6 +13,7 @@ from ome_types import OME
 
 from .plates import (
     Plate,
+    WellAssignmentMode,
     WellPosition,
     extract_position_stage_xy_um,
     extract_scene_to_position_index,
@@ -87,7 +88,25 @@ class Reader(reader.Reader):
     def scenes(self) -> Tuple[str, ...]:
         with self._fs.open(self._path, "rb") as f:
             with nd2.ND2File(f) as rdr:
-                return tuple(rdr._position_names())
+                try:
+                    return tuple(rdr._position_names())
+                except Exception as exc:
+                    # Some files carry experiment metadata that `nd2` cannot
+                    # parse (e.g. unknown loop types). Fall back to a generic
+                    # scene naming so the file is still readable.
+                    log.warning(
+                        "Failed to read ND2 position names, falling back to "
+                        "generic scene names: %s",
+                        exc,
+                    )
+                    # `rdr.sizes` also parses the experiment, so it may raise
+                    # the same error. Default to a single position in that case
+                    # (these unparseable files are single-position splits).
+                    try:
+                        num_positions = rdr.sizes.get("P", 1)
+                    except Exception:
+                        num_positions = 1
+                    return tuple(f"XYPos:{i}" for i in range(num_positions))
 
     def _read_delayed(self) -> xr.DataArray:
         return self._xarr_reformat(delayed=True)
@@ -188,16 +207,26 @@ class Reader(reader.Reader):
             with nd2.ND2File(f) as rdr:
                 wells = self._plate.generate_wells()
 
-                position_xy = extract_position_stage_xy_um(rdr)
-                scene_to_position = extract_scene_to_position_index(
-                    rdr, num_scenes=len(self.scenes)
+                num_scenes = len(self.scenes)
+                position_xy, used_fallback = extract_position_stage_xy_um(
+                    rdr, num_scenes=num_scenes
                 )
+                scene_to_position = extract_scene_to_position_index(
+                    rdr, num_scenes=num_scenes
+                )
+
+        # Positions recovered from the events-table fallback are less precise
+        # than XYPosLoop, so require the stage position to be near a well
+        # before assigning it. This nulls out off-plate images (e.g. a
+        # calibration target) instead of snapping them to the nearest well.
+        mode = WellAssignmentMode.HALF_SPACING if used_fallback else None
 
         self._scene_to_well_map = map_scenes_to_wells(
             scene_to_position,
             position_xy,
             wells,
             plate=self._plate,
+            mode=mode,
         )
 
         return self._scene_to_well_map

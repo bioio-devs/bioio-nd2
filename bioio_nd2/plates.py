@@ -245,28 +245,96 @@ PLATE_96 = Plate(
 ###############################################################################
 
 
-def extract_position_stage_xy_um(
+def _stage_xy_from_events(
     rdr: nd2.ND2File,
+    scene_to_position: Dict[int, int],
 ) -> Dict[int, Tuple[float, float]]:
     """
-    Extract stage XY positions (µm) for each ND2 position index.
+    Recover per-position stage XY (µm) from the acquisition events table.
+
+    Used as a fallback when a split single-position file no longer carries an
+    ``XYPosLoop``. Coordinates use the same negated sign convention.
 
     Returns
     -------
     Dict[int, Tuple[float, float]]
-        Mapping of ND2 position index → (x_um, y_um)
-
+        Mapping of ND2 position index → (x_um, y_um). Empty if unavailable.
     """
-    for exp in rdr.experiment:
-        if "XYPosLoop" in str(exp):
-            points = exp.parameters.points
-            break
-    else:
+    try:
+        events = rdr.events()
+    except Exception as exc:
+        log.debug("Could not read events table: %s", exc)
+        return {}
+
+    if not events:
+        return {}
+
+    # The coordinate column names include the µm unit; match on a prefix so we
+    # are robust to the unit's encoding.
+    sample = events[0]
+    x_key = next((k for k in sample if "X Coord" in k), None)
+    y_key = next((k for k in sample if "Y Coord" in k), None)
+    if x_key is None or y_key is None:
+        return {}
+
+    num_frames = len(events)
+    num_scenes = (max(scene_to_position) + 1) if scene_to_position else 1
+    # Events are ordered by acquisition sequence; for multi-position files the
+    # position is the outermost loop, so each scene's frames are contiguous.
+    frames_per_scene = max(1, num_frames // num_scenes)
+
+    position_xy: Dict[int, Tuple[float, float]] = {}
+    for scene_index, pos_index in scene_to_position.items():
+        if pos_index in position_xy:
+            continue
+        frame_index = min(scene_index * frames_per_scene, num_frames - 1)
+        row = events[frame_index]
+        x, y = row.get(x_key), row.get(y_key)
+        if x is not None and y is not None:
+            position_xy[pos_index] = (-x, -y)
+
+    return position_xy
+
+
+def extract_position_stage_xy_um(
+    rdr: nd2.ND2File,
+    num_scenes: Optional[int] = None,
+) -> Tuple[Dict[int, Tuple[float, float]], bool]:
+    """
+    Extract stage XY positions (µm) for each ND2 position index.
+
+    Falls back to the events table when the file has no ``XYPosLoop``
+    (e.g. single-position files split from a multi-position acquisition).
+
+    Returns
+    -------
+    Tuple[Dict[int, Tuple[float, float]], bool]
+        Mapping of ND2 position index → (x_um, y_um), and whether the
+        events-table fallback was used rather than the ``XYPosLoop``.
+    """
+    # Preferred: the XYPosLoop carries one point per stage position.
+    try:
+        for exp in rdr.experiment:
+            if "XYPosLoop" in str(exp):
+                points = exp.parameters.points
+                return {
+                    i: (-p.stagePositionUm.x, -p.stagePositionUm.y)
+                    for i, p in enumerate(points)
+                }, False
+    except Exception as exc:
+        log.debug("Could not read XYPosLoop, falling back to frames: %s", exc)
+
+    # Fallback: recover the stage position from the events table.
+    if num_scenes is None:
+        num_scenes = rdr.sizes.get("P", 1)
+
+    scene_to_position = extract_scene_to_position_index(rdr, num_scenes)
+    position_xy = _stage_xy_from_events(rdr, scene_to_position)
+
+    if not position_xy:
         raise RuntimeError("ND2 file does not contain XY position metadata.")
 
-    return {
-        i: (-p.stagePositionUm.x, -p.stagePositionUm.y) for i, p in enumerate(points)
-    }
+    return position_xy, True
 
 
 def extract_scene_to_position_index(
@@ -311,9 +379,12 @@ def find_closest_well(
     wells: Iterable[PlateWell],
     *,
     plate: Plate,
+    mode: Optional[WellAssignmentMode] = None,
 ) -> Optional[WellPosition]:
     """
-    Assign a stage position to a logical well using the plate's assignment policy.
+    Assign a stage position to a logical well using an assignment policy.
+
+    When ``mode`` is None the plate's configured ``assignment_mode`` is used.
 
     Returns
     -------
@@ -328,7 +399,7 @@ def find_closest_well(
 
     dist = np.sqrt((x - best.center_x) ** 2 + (y - best.center_y) ** 2)
 
-    mode = plate.assignment_mode
+    mode = mode if mode is not None else plate.assignment_mode
 
     if mode is WellAssignmentMode.CLOSEST:
         return WellPosition(best.row, best.col)
@@ -352,17 +423,19 @@ def map_scenes_to_wells(
     wells: Iterable[PlateWell],
     *,
     plate: Plate,
+    mode: Optional[WellAssignmentMode] = None,
 ) -> Dict[int, Optional[WellPosition]]:
     """
     Map absolute scene indices to logical well positions.
 
     This is the primary orchestration function used by the ND2 Reader.
+    ``mode`` overrides the plate's assignment policy when provided.
 
     Returns
     -------
     Dict[int, Optional[WellPosition]]
         Mapping of absolute scene index to logical well position. If the
-        plate's assignment policy rejects a position (e.g. strict physical
+        assignment policy rejects a position (e.g. strict physical
         containment), the value for that scene will be ``None``.
     """
     mapping: Dict[int, Optional[WellPosition]] = {}
@@ -374,6 +447,7 @@ def map_scenes_to_wells(
             y,
             wells,
             plate=plate,
+            mode=mode,
         )
 
     return mapping
