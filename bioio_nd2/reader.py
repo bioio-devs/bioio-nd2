@@ -13,7 +13,6 @@ from ome_types import OME
 
 from .plates import (
     Plate,
-    WellAssignmentMode,
     WellPosition,
     extract_position_stage_xy_um,
     extract_scene_to_position_index,
@@ -207,26 +206,16 @@ class Reader(reader.Reader):
             with nd2.ND2File(f) as rdr:
                 wells = self._plate.generate_wells()
 
-                num_scenes = len(self.scenes)
-                position_xy, used_fallback = extract_position_stage_xy_um(
-                    rdr, num_scenes=num_scenes
-                )
+                position_xy = extract_position_stage_xy_um(rdr)
                 scene_to_position = extract_scene_to_position_index(
-                    rdr, num_scenes=num_scenes
+                    rdr, num_scenes=len(self.scenes)
                 )
-
-        # Positions recovered from the events-table fallback are less precise
-        # than XYPosLoop, so require the stage position to be near a well
-        # before assigning it. This nulls out off-plate images (e.g. a
-        # calibration target) instead of snapping them to the nearest well.
-        mode = WellAssignmentMode.HALF_SPACING if used_fallback else None
 
         self._scene_to_well_map = map_scenes_to_wells(
             scene_to_position,
             position_xy,
             wells,
             plate=self._plate,
-            mode=mode,
         )
 
         return self._scene_to_well_map

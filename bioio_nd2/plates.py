@@ -299,7 +299,7 @@ def _stage_xy_from_events(
 def extract_position_stage_xy_um(
     rdr: nd2.ND2File,
     num_scenes: Optional[int] = None,
-) -> Tuple[Dict[int, Tuple[float, float]], bool]:
+) -> Dict[int, Tuple[float, float]]:
     """
     Extract stage XY positions (µm) for each ND2 position index.
 
@@ -308,9 +308,8 @@ def extract_position_stage_xy_um(
 
     Returns
     -------
-    Tuple[Dict[int, Tuple[float, float]], bool]
-        Mapping of ND2 position index → (x_um, y_um), and whether the
-        events-table fallback was used rather than the ``XYPosLoop``.
+    Dict[int, Tuple[float, float]]
+        Mapping of ND2 position index → (x_um, y_um)
     """
     # Preferred: the XYPosLoop carries one point per stage position.
     try:
@@ -320,7 +319,7 @@ def extract_position_stage_xy_um(
                 return {
                     i: (-p.stagePositionUm.x, -p.stagePositionUm.y)
                     for i, p in enumerate(points)
-                }, False
+                }
     except Exception as exc:
         log.debug("Could not read XYPosLoop, falling back to frames: %s", exc)
 
@@ -334,7 +333,7 @@ def extract_position_stage_xy_um(
     if not position_xy:
         raise RuntimeError("ND2 file does not contain XY position metadata.")
 
-    return position_xy, True
+    return position_xy
 
 
 def extract_scene_to_position_index(
@@ -379,12 +378,9 @@ def find_closest_well(
     wells: Iterable[PlateWell],
     *,
     plate: Plate,
-    mode: Optional[WellAssignmentMode] = None,
 ) -> Optional[WellPosition]:
     """
-    Assign a stage position to a logical well using an assignment policy.
-
-    When ``mode`` is None the plate's configured ``assignment_mode`` is used.
+    Assign a stage position to a logical well using the plate's assignment policy.
 
     Returns
     -------
@@ -399,7 +395,7 @@ def find_closest_well(
 
     dist = np.sqrt((x - best.center_x) ** 2 + (y - best.center_y) ** 2)
 
-    mode = mode if mode is not None else plate.assignment_mode
+    mode = plate.assignment_mode
 
     if mode is WellAssignmentMode.CLOSEST:
         return WellPosition(best.row, best.col)
@@ -423,19 +419,17 @@ def map_scenes_to_wells(
     wells: Iterable[PlateWell],
     *,
     plate: Plate,
-    mode: Optional[WellAssignmentMode] = None,
 ) -> Dict[int, Optional[WellPosition]]:
     """
     Map absolute scene indices to logical well positions.
 
     This is the primary orchestration function used by the ND2 Reader.
-    ``mode`` overrides the plate's assignment policy when provided.
 
     Returns
     -------
     Dict[int, Optional[WellPosition]]
         Mapping of absolute scene index to logical well position. If the
-        assignment policy rejects a position (e.g. strict physical
+        plate's assignment policy rejects a position (e.g. strict physical
         containment), the value for that scene will be ``None``.
     """
     mapping: Dict[int, Optional[WellPosition]] = {}
@@ -447,7 +441,6 @@ def map_scenes_to_wells(
             y,
             wells,
             plate=plate,
-            mode=mode,
         )
 
     return mapping

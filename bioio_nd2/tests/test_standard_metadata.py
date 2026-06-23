@@ -90,7 +90,7 @@ from .conftest import LOCAL_RESOURCES_DIR
             "Argo_sphere_water.nd2",
             {
                 "Binning": "1x1",
-                "Column": None,
+                "Column": "7",
                 "Dimensions Present": "CZYX",
                 "Image Size C": 1,
                 "Image Size T": None,
@@ -115,7 +115,7 @@ from .conftest import LOCAL_RESOURCES_DIR
                 "Pixel Size Y": 0.108333333333333,
                 "Pixel Size Z": 0.5,
                 "Position Index": None,
-                "Row": None,
+                "Row": "E",
                 "Timelapse": False,
                 "Timelapse Interval": None,
                 "Total Time Duration": datetime.timedelta(microseconds=245184),
