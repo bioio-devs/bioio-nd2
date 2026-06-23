@@ -87,25 +87,7 @@ class Reader(reader.Reader):
     def scenes(self) -> Tuple[str, ...]:
         with self._fs.open(self._path, "rb") as f:
             with nd2.ND2File(f) as rdr:
-                try:
-                    return tuple(rdr._position_names())
-                except Exception as exc:
-                    # Some files carry experiment metadata that `nd2` cannot
-                    # parse (e.g. unknown loop types). Fall back to a generic
-                    # scene naming so the file is still readable.
-                    log.warning(
-                        "Failed to read ND2 position names, falling back to "
-                        "generic scene names: %s",
-                        exc,
-                    )
-                    # `rdr.sizes` also parses the experiment, so it may raise
-                    # the same error. Default to a single position in that case
-                    # (these unparseable files are single-position splits).
-                    try:
-                        num_positions = rdr.sizes.get("P", 1)
-                    except Exception:
-                        num_positions = 1
-                    return tuple(f"XYPos:{i}" for i in range(num_positions))
+                return tuple(rdr._position_names())
 
     def _read_delayed(self) -> xr.DataArray:
         return self._xarr_reformat(delayed=True)
