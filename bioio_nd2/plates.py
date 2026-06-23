@@ -247,27 +247,16 @@ PLATE_96 = Plate(
 
 def _stage_xy_from_events(
     rdr: nd2.ND2File,
-    scene_to_position: Dict[int, int],
-) -> Dict[int, Tuple[float, float]]:
+) -> Optional[Tuple[float, float]]:
     """
-    Recover per-position stage XY (µm) from the acquisition events table.
+    Recover the stage XY (µm) of a single-position file from the events table.
 
-    Used as a fallback when a split single-position file no longer carries an
-    ``XYPosLoop``. Coordinates use the same negated sign convention.
-
-    Returns
-    -------
-    Dict[int, Tuple[float, float]]
-        Mapping of ND2 position index → (x_um, y_um). Empty if unavailable.
+    Used as a fallback when a split file no longer carries an ``XYPosLoop``.
+    Returns the position with the same negated sign convention, or None.
     """
-    try:
-        events = rdr.events()
-    except Exception as exc:
-        log.debug("Could not read events table: %s", exc)
-        return {}
-
+    events = rdr.events()
     if not events:
-        return {}
+        return None
 
     # The coordinate column names include the µm unit; match on a prefix so we
     # are robust to the unit's encoding.
@@ -275,30 +264,17 @@ def _stage_xy_from_events(
     x_key = next((k for k in sample if "X Coord" in k), None)
     y_key = next((k for k in sample if "Y Coord" in k), None)
     if x_key is None or y_key is None:
-        return {}
+        return None
 
-    num_frames = len(events)
-    num_scenes = (max(scene_to_position) + 1) if scene_to_position else 1
-    # Events are ordered by acquisition sequence; for multi-position files the
-    # position is the outermost loop, so each scene's frames are contiguous.
-    frames_per_scene = max(1, num_frames // num_scenes)
+    x, y = sample.get(x_key), sample.get(y_key)
+    if x is None or y is None:
+        return None
 
-    position_xy: Dict[int, Tuple[float, float]] = {}
-    for scene_index, pos_index in scene_to_position.items():
-        if pos_index in position_xy:
-            continue
-        frame_index = min(scene_index * frames_per_scene, num_frames - 1)
-        row = events[frame_index]
-        x, y = row.get(x_key), row.get(y_key)
-        if x is not None and y is not None:
-            position_xy[pos_index] = (-x, -y)
-
-    return position_xy
+    return (-x, -y)
 
 
 def extract_position_stage_xy_um(
     rdr: nd2.ND2File,
-    num_scenes: Optional[int] = None,
 ) -> Dict[int, Tuple[float, float]]:
     """
     Extract stage XY positions (µm) for each ND2 position index.
@@ -311,29 +287,21 @@ def extract_position_stage_xy_um(
     Dict[int, Tuple[float, float]]
         Mapping of ND2 position index → (x_um, y_um)
     """
-    # Preferred: the XYPosLoop carries one point per stage position.
-    try:
-        for exp in rdr.experiment:
-            if "XYPosLoop" in str(exp):
-                points = exp.parameters.points
-                return {
-                    i: (-p.stagePositionUm.x, -p.stagePositionUm.y)
-                    for i, p in enumerate(points)
-                }
-    except Exception as exc:
-        log.debug("Could not read XYPosLoop, falling back to frames: %s", exc)
+    for exp in rdr.experiment:
+        if "XYPosLoop" in str(exp):
+            points = exp.parameters.points
+            return {
+                i: (-p.stagePositionUm.x, -p.stagePositionUm.y)
+                for i, p in enumerate(points)
+            }
 
-    # Fallback: recover the stage position from the events table.
-    if num_scenes is None:
-        num_scenes = rdr.sizes.get("P", 1)
-
-    scene_to_position = extract_scene_to_position_index(rdr, num_scenes)
-    position_xy = _stage_xy_from_events(rdr, scene_to_position)
-
-    if not position_xy:
+    # No XYPosLoop: single-position file. Recover the logged stage position
+    # from the events table.
+    xy = _stage_xy_from_events(rdr)
+    if xy is None:
         raise RuntimeError("ND2 file does not contain XY position metadata.")
 
-    return position_xy
+    return {0: xy}
 
 
 def extract_scene_to_position_index(
