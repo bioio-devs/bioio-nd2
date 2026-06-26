@@ -245,28 +245,63 @@ PLATE_96 = Plate(
 ###############################################################################
 
 
+def _stage_xy_from_events(
+    rdr: nd2.ND2File,
+) -> Optional[Tuple[float, float]]:
+    """
+    Recover the stage XY (µm) of a single-position file from the events table.
+
+    Used as a fallback when a split file no longer carries an ``XYPosLoop``.
+    Returns the position with the same negated sign convention, or None.
+    """
+    events = rdr.events()
+    if not events:
+        return None
+
+    # The coordinate column names include the µm unit; match on a prefix so we
+    # are robust to the unit's encoding.
+    sample = events[0]
+    x_key = next((k for k in sample if "X Coord" in k), None)
+    y_key = next((k for k in sample if "Y Coord" in k), None)
+    if x_key is None or y_key is None:
+        return None
+
+    x, y = sample.get(x_key), sample.get(y_key)
+    if x is None or y is None:
+        return None
+
+    return (-x, -y)
+
+
 def extract_position_stage_xy_um(
     rdr: nd2.ND2File,
 ) -> Dict[int, Tuple[float, float]]:
     """
     Extract stage XY positions (µm) for each ND2 position index.
 
+    Falls back to the events table when the file has no ``XYPosLoop``
+    (e.g. single-position files split from a multi-position acquisition).
+
     Returns
     -------
     Dict[int, Tuple[float, float]]
         Mapping of ND2 position index → (x_um, y_um)
-
     """
     for exp in rdr.experiment:
         if "XYPosLoop" in str(exp):
             points = exp.parameters.points
-            break
-    else:
+            return {
+                i: (-p.stagePositionUm.x, -p.stagePositionUm.y)
+                for i, p in enumerate(points)
+            }
+
+    # No XYPosLoop: single-position file. Recover the logged stage position
+    # from the events table.
+    xy = _stage_xy_from_events(rdr)
+    if xy is None:
         raise RuntimeError("ND2 file does not contain XY position metadata.")
 
-    return {
-        i: (-p.stagePositionUm.x, -p.stagePositionUm.y) for i, p in enumerate(points)
-    }
+    return {0: xy}
 
 
 def extract_scene_to_position_index(

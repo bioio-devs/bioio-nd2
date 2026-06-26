@@ -90,7 +90,7 @@ from .conftest import LOCAL_RESOURCES_DIR
             "Argo_sphere_water.nd2",
             {
                 "Binning": "1x1",
-                "Column": None,
+                "Column": "7",
                 "Dimensions Present": "CZYX",
                 "Image Size C": 1,
                 "Image Size T": None,
@@ -115,7 +115,7 @@ from .conftest import LOCAL_RESOURCES_DIR
                 "Pixel Size Y": 0.108333333333333,
                 "Pixel Size Z": 0.5,
                 "Position Index": None,
-                "Row": None,
+                "Row": "E",
                 "Timelapse": False,
                 "Timelapse Interval": None,
                 "Total Time Duration": datetime.timedelta(microseconds=245184),
@@ -139,12 +139,13 @@ def test_nd2_standard_metadata(filename: str, expected: dict[str, Any]) -> None:
 @pytest.mark.parametrize(
     "filename, scene_index, expected_row, expected_col",
     [
-        # Case 1: ND2 file without XYPosLoop fails to produce
+        # Case 1: ND2 file without an XYPosLoop. The stage position is
+        # recovered from the events table and lands inside well D6.
         (
             "ND2_maxime_BF007.nd2",
             0,
-            None,
-            None,
+            "D",
+            "6",
         ),
         # Case 2: Plate scan file, scene maps to E3
         (
