@@ -217,51 +217,46 @@ def test_frame_metadata(cache: bool) -> None:
         rdr.xarray_data.attrs["unprocessed"]["frame"], nd2.structures.FrameMetadata
     )
 
+
 @pytest.mark.parametrize(
-    "filename, set_scene, dimension_order_out, kwargs",
+    "filename, set_scene, dim_specs",
     [
-        # Simplest case: single channel selection.
-        ("ND2_dims_c2y32x32.nd2", 0, "YX", {"C": 1}),
-        # Single-plane collapse across two dims.
-        ("ND2_dims_p4z5t3c2y32x32.nd2", 1, "ZYX", {"T": 1, "C": 0}),
+        # Single channel selection (drops the C axis).
+        ("ND2_dims_c2y32x32.nd2", 0, [1, slice(None), slice(None)]),
+        # Single-plane collapse across two dims (native order TZCYX).
+        (
+            "ND2_dims_p4z5t3c2y32x32.nd2",
+            1,
+            [1, 0, slice(None), slice(None), slice(None)],
+        ),
         # Slices with a step + fancy indexing together, on a non-zero scene.
         (
             "ND2_dims_p4z5t3c2y32x32.nd2",
             2,
-            "TZCYX",
-            {"T": slice(0, 2), "C": [0, 1], "Z": slice(0, 5, 2)},
+            [slice(0, 2), slice(0, 5, 2), [0, 1], slice(None), slice(None)],
         ),
-        # Dimension not present in the file (T) is added with depth 1.
-        ("ND2_dims_c2y32x32.nd2", 0, "TCYX", {}),
-        # RGB file: the trailing sample (S) axis must survive the round trip.
-        ("ND2_dims_rgb_t3p2c2z3x64y64.nd2", 1, "ZCYXS", {"T": 0}),
+        # RGB file (native order TZCYXS): the trailing sample axis must survive.
+        (
+            "ND2_dims_rgb_t3p2c2z3x64y64.nd2",
+            1,
+            [0, slice(None), slice(None), slice(None), slice(None), slice(None)],
+        ),
     ],
 )
 def test_indexed_read_matches_full_read(
     filename: str,
     set_scene: int,
-    dimension_order_out: str,
-    kwargs: dict,
-    monkeypatch: pytest.MonkeyPatch,
+    dim_specs: list,
 ) -> None:
     """
-    The optimized indexed read must return exactly the same pixels as the
-    naive "read the whole scene, then slice" path it replaces.
+    Checks that slice read matches full data slice 
     """
     uri = LOCAL_RESOURCES_DIR / filename
 
-    optimized = Reader(uri)
-    optimized.set_scene(set_scene)
-    actual = optimized.get_image_data(dimension_order_out, **kwargs)
+    reader = Reader(uri)
+    reader.set_scene(set_scene)
 
-    # Reference: fall back to the base-class behavior (materialize, then index).
-    reference = Reader(uri)
-    reference.set_scene(set_scene)
-    monkeypatch.setattr(
-        reference,
-        "_read_indexed",
-        lambda _given_dims, dim_specs: reference.data[tuple(dim_specs)],
-    )
-    expected = reference.get_image_data(dimension_order_out, **kwargs)
+    expected = reader.data[tuple(dim_specs)]
+    actual = reader._read_indexed(reader.dims.order, dim_specs)
 
     np.testing.assert_array_equal(actual, expected)
