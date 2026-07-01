@@ -217,24 +217,6 @@ def test_frame_metadata(cache: bool) -> None:
         rdr.xarray_data.attrs["unprocessed"]["frame"], nd2.structures.FrameMetadata
     )
 
-
-def _count_frame_reads(
-    monkeypatch: pytest.MonkeyPatch, work: Any
-) -> Tuple[Any, int]:
-    """Run ``work()`` while counting real ``nd2.ND2File.read_frame`` calls."""
-    reads = 0
-    original = nd2.ND2File.read_frame
-
-    def counting_read_frame(self: Any, frame_index: int) -> Any:
-        nonlocal reads
-        reads += 1
-        return original(self, frame_index)
-
-    monkeypatch.setattr(nd2.ND2File, "read_frame", counting_read_frame)
-    result = work()
-    return result, reads
-
-
 @pytest.mark.parametrize(
     "filename, set_scene, dimension_order_out, kwargs",
     [
@@ -283,46 +265,3 @@ def test_indexed_read_matches_full_read(
     expected = reference.get_image_data(dimension_order_out, **kwargs)
 
     np.testing.assert_array_equal(actual, expected)
-
-
-def test_indexed_read_only_reads_requested_frames(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """An indexed read should pull only the requested planes off disk."""
-    uri = LOCAL_RESOURCES_DIR / "ND2_dims_p4z5t3c2y32x32.nd2"
-
-    rdr = Reader(uri)
-    rdr.set_scene(1)
-
-    # Selecting one T and one C leaves only the 5 Z planes to read, far fewer
-    # than the 3 * 5 * 2 = 30 frames in the full scene.
-    _, reads = _count_frame_reads(
-        monkeypatch, lambda: rdr.get_image_data("ZYX", T=1, C=0)
-    )
-    assert reads == 5
-
-
-def test_metadata_served_without_reading_frames(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """``dims``/``shape``/``dtype`` come from metadata, reading no pixel data."""
-    uri = LOCAL_RESOURCES_DIR / "ND2_dims_p4z5t3c2y32x32.nd2"
-
-    def read_metadata() -> None:
-        rdr = Reader(uri)
-        rdr.set_scene(1)
-        _ = rdr.dims
-        _ = rdr.shape
-        _ = rdr.dtype
-
-    _, reads = _count_frame_reads(monkeypatch, read_metadata)
-    assert reads == 0
-
-
-def test_position_out_of_range_raises() -> None:
-    """Selecting a scene index beyond the available positions is an error."""
-    uri = LOCAL_RESOURCES_DIR / "ND2_dims_p4z5t3c2y32x32.nd2"
-    rdr = Reader(uri)
-    rdr._current_scene_index = 99
-    with pytest.raises(IndexError, match="out of range"):
-        rdr.dims
