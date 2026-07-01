@@ -54,8 +54,6 @@ class Reader(reader.Reader):
     """
 
     _scene_to_well_map: Dict[int, WellPosition | None] | None = None
-    # must match the bioio-base Reader's signature for the `dims` property,
-    # which is cached here for mypy type checking reasons
     _dims: Optional[Dimensions] = None
     _dtype: Optional[np.dtype] = None
 
@@ -94,16 +92,8 @@ class Reader(reader.Reader):
 
     @contextmanager
     def _open_nd2(self) -> Iterator[nd2.ND2File]:
-        """Open the backing ND2 file, memory-mapping it when possible.
-
-        For a local filesystem the path is handed directly to ``nd2.ND2File`` so
-        the SDK memory-maps the file. Repeated ``read_frame`` calls then read
-        from OS-cached pages and benefit from kernel read-ahead, instead of
-        streaming every plane through a Python file object. Memory-mapping maps
-        the file in place and never copies it, which matters for very large ND2s
-        that cannot be staged to local disk. Remote sources (a
-        ``CachingFileSystem``) cannot be memory-mapped, so they fall back to an
-        fsspec handle.
+        """
+        Open the backing ND2 file, memory-mapping it when possible.
         """
         if isinstance(self._fs, LocalFileSystem):
             with nd2.ND2File(self._path) as rdr:
