@@ -39,7 +39,7 @@ from .conftest import LOCAL_RESOURCES_DIR
                 "Pixel Size Y": 0.652452890023035,
                 "Pixel Size Z": 1.0,
                 "Position Index": None,
-                "Row": "D",
+                "Row": "4",
                 "Timelapse": True,
                 "Timelapse Interval": datetime.timedelta(
                     seconds=18, microseconds=495260
@@ -76,7 +76,7 @@ from .conftest import LOCAL_RESOURCES_DIR
                 "Pixel Size Y": 0.652452890023035,
                 "Pixel Size Z": 1.0,
                 "Position Index": None,
-                "Row": "D",
+                "Row": "4",
                 "Timelapse": True,
                 "Timelapse Interval": datetime.timedelta(
                     seconds=4, microseconds=293375
@@ -115,7 +115,7 @@ from .conftest import LOCAL_RESOURCES_DIR
                 "Pixel Size Y": 0.108333333333333,
                 "Pixel Size Z": 0.5,
                 "Position Index": None,
-                "Row": "E",
+                "Row": "5",
                 "Timelapse": False,
                 "Timelapse Interval": None,
                 "Total Time Duration": datetime.timedelta(microseconds=245184),
