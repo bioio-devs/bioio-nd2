@@ -137,14 +137,20 @@ class Reader(reader.Reader):
 
     @staticmethod
     def _time_period_ms(experiment: list) -> Optional[float]:
-        """Return the inter-frame interval in milliseconds from an ND2
-        experiment's time loop, or ``None`` if there isn't a single well-defined
-        interval.
+        """
+        Extract the inter-frame time interval, in milliseconds, from an ND2
+        experiment's time loop.
 
-        A ``TimeLoop`` is equidistant, so its ``periodMs`` is the interval. A
-        ``NETimeLoop`` (non-equidistant) only has a single interval when it holds
-        exactly one period; with multiple periods there is no single value to
-        report.
+        Parameters
+        ----------
+        experiment: list
+            The ND2 experiment loops, as returned by `nd2.ND2File.experiment`.
+
+        Returns
+        -------
+        period_ms: Optional[float]
+            The interval in milliseconds, or None when there is no time loop with
+            a single well-defined interval.
         """
         for loop in experiment:
             if isinstance(loop, nd2.structures.TimeLoop):
@@ -175,12 +181,21 @@ class Reader(reader.Reader):
 
     @staticmethod
     def _ome_unit_to_pint(ome_unit: Any) -> Optional[types.Unit]:
-        """Convert an OME unit enum (e.g. ``UnitsLength.MICROMETER``) into a
-        ``pint.Unit`` from the shared BioIO registry, or ``None`` if it is
-        absent or unrecognized.
+        """
+        Convert an OME unit enum into a `pint.Unit` from the shared BioIO
+        registry.
 
-        The OME enum's ``.value`` is the unit symbol (``"µm"``, ``"s"``), which
-        the shared registry (``bioio_base.types.ureg``) parses directly.
+        Parameters
+        ----------
+        ome_unit: Any
+            An OME unit enum (e.g. `UnitsLength.MICROMETER`), whose `.value` is
+            the unit symbol (`"µm"`, `"s"`) that `bioio_base.types.ureg` parses.
+
+        Returns
+        -------
+        unit: Optional[types.Unit]
+            The corresponding `pint.Unit`, or None if the input is absent or
+            unrecognized.
         """
         if ome_unit is None:
             return None
@@ -193,13 +208,6 @@ class Reader(reader.Reader):
     def dimension_properties(self) -> types.DimensionProperties:
         """
         Per-dimension metadata describing semantic meaning and units.
-
-        Unlike the base Reader, which leaves all units as ``None``, this attaches
-        real ``pint.Unit`` instances read from the ND2 file's OME metadata (the
-        ``physical_size_*_unit`` and ``time_increment_unit`` fields) via the
-        shared registry ``bioio_base.types.ureg``. This lets downstream tooling
-        read a genuine, file-sourced unit from a consistent location rather than
-        assuming microns.
         """
         s = self.scale
         if not hasattr(nd2.ND2File, "ome_metadata"):
