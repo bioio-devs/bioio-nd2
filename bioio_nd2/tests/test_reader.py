@@ -1,6 +1,9 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 
+from contextlib import nullcontext
+from datetime import timedelta
+from types import SimpleNamespace
 from typing import Any, List, Tuple, Union
 
 import numpy as np
@@ -216,3 +219,119 @@ def test_frame_metadata(cache: bool) -> None:
     assert isinstance(
         rdr.xarray_data.attrs["unprocessed"]["frame"], nd2.structures.FrameMetadata
     )
+
+
+def _make_timeloop(period_ms: float) -> Any:
+    return nd2.structures.TimeLoop(
+        count=1,
+        nestingLevel=0,
+        parameters=nd2.structures.TimeLoopParams(
+            startMs=0.0,
+            periodMs=period_ms,
+            durationMs=0.0,
+            periodDiff=nd2.structures.PeriodDiff(avg=0.0, max=0.0, min=0.0),
+        ),
+    )
+
+
+def _fake_nd2_for_experiment(experiment: List[Any]) -> Any:
+    class FakeND2File:
+        def __init__(self, file: object) -> None:
+            pass
+
+        def __enter__(self) -> "FakeND2File":
+            return self
+
+        def __exit__(self, *args: object) -> None:
+            pass
+
+        @property
+        def experiment(self) -> List[Any]:
+            return experiment
+
+    return FakeND2File
+
+
+class _FakeFS:
+    def open(self, path: str, mode: str) -> Any:
+        return nullcontext(object())
+
+
+def test_time_interval_from_timeloop(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        "bioio_nd2.reader.nd2.ND2File",
+        _fake_nd2_for_experiment([_make_timeloop(360000.0)]),
+    )
+
+    rdr = Reader.__new__(Reader)
+    rdr._fs = _FakeFS()
+    rdr._path = "example.nd2"
+
+    assert rdr.time_interval == timedelta(milliseconds=360000.0)
+
+
+def test_time_interval_none_without_timeloop(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        "bioio_nd2.reader.nd2.ND2File",
+        _fake_nd2_for_experiment([]),
+    )
+
+    rdr = Reader.__new__(Reader)
+    rdr._fs = _FakeFS()
+    rdr._path = "example.nd2"
+
+    assert rdr.time_interval is None
+
+
+def test_dimension_properties_attach_units_from_ome(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # OME unit enums expose the symbol via ``.value``, which the shared
+    # registry parses (µm -> micrometer, s -> second).
+    pixels = SimpleNamespace(
+        physical_size_x_unit=SimpleNamespace(value="µm"),
+        physical_size_y_unit=SimpleNamespace(value="µm"),
+        physical_size_z_unit=SimpleNamespace(value="µm"),
+        time_increment_unit=SimpleNamespace(value="s"),
+    )
+    ome = SimpleNamespace(images=[SimpleNamespace(pixels=pixels)])
+
+    class FakeND2File:
+        def __init__(self, file: object) -> None:
+            pass
+
+        def __enter__(self) -> "FakeND2File":
+            return self
+
+        def __exit__(self, *args: object) -> None:
+            pass
+
+        @property
+        def experiment(self) -> List[Any]:
+            return [_make_timeloop(1000.0)]
+
+        def voxel_size(self) -> Tuple[float, float, float]:
+            return (0.5, 0.5, 2.0)
+
+        def ome_metadata(self) -> Any:
+            return ome
+
+    monkeypatch.setattr("bioio_nd2.reader.nd2.ND2File", FakeND2File)
+
+    rdr = Reader.__new__(Reader)
+    rdr._fs = _FakeFS()
+    rdr._path = "example.nd2"
+
+    dp = rdr.dimension_properties
+
+    assert dp.T.type == "time"
+    assert str(dp.T.unit) == "second"
+    assert dp.C.type is None
+    assert dp.C.unit is None
+    for axis in (dp.Z, dp.Y, dp.X):
+        assert axis.type == "space"
+        assert str(axis.unit) == "micrometer"
