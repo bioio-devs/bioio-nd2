@@ -1,9 +1,7 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 
-from contextlib import nullcontext
 from datetime import timedelta
-from types import SimpleNamespace
 from typing import Any, List, Tuple, Union
 
 import numpy as np
@@ -221,117 +219,70 @@ def test_frame_metadata(cache: bool) -> None:
     )
 
 
-def _make_timeloop(period_ms: float) -> Any:
-    return nd2.structures.TimeLoop(
-        count=1,
-        nestingLevel=0,
-        parameters=nd2.structures.TimeLoopParams(
-            startMs=0.0,
-            periodMs=period_ms,
-            durationMs=0.0,
-            periodDiff=nd2.structures.PeriodDiff(avg=0.0, max=0.0, min=0.0),
+@pytest.mark.parametrize(
+    "filename, expected_interval",
+    [
+        # Time-lapse files carry a TimeLoop, so time_interval is populated.
+        ("ND2_jonas_header_test2.nd2", timedelta(seconds=5)),
+        ("ND2_dims_rgb_t3p2c2z3x64y64.nd2", timedelta(seconds=1)),
+        ("ND2_dims_t3c2y32x32.nd2", timedelta(milliseconds=1)),
+        # Legacy file (no OME metadata) still exposes its experiment loop.
+        ("ND2_aryeh_but3_cont200-1.nd2", timedelta(minutes=15)),
+        # Files without a time loop report no interval.
+        ("ND2_dims_c2y32x32.nd2", None),
+        ("ND2_maxime_BF007.nd2", None),
+    ],
+)
+def test_time_interval(
+    filename: str,
+    expected_interval: object,
+) -> None:
+    rdr = Reader(LOCAL_RESOURCES_DIR / filename)
+
+    assert rdr.time_interval == expected_interval
+
+
+@pytest.mark.parametrize(
+    "filename, expected_t, expected_space",
+    [
+        # Time-lapse with OME metadata: seconds on T, microns on ZYX.
+        (
+            "ND2_jonas_header_test2.nd2",
+            ("time", "second"),
+            "micrometer",
         ),
-    )
-
-
-def _fake_nd2_for_experiment(experiment: List[Any]) -> Any:
-    class FakeND2File:
-        def __init__(self, file: object) -> None:
-            pass
-
-        def __enter__(self) -> "FakeND2File":
-            return self
-
-        def __exit__(self, *args: object) -> None:
-            pass
-
-        @property
-        def experiment(self) -> List[Any]:
-            return experiment
-
-    return FakeND2File
-
-
-class _FakeFS:
-    def open(self, path: str, mode: str) -> Any:
-        return nullcontext(object())
-
-
-def test_time_interval_from_timeloop(
-    monkeypatch: pytest.MonkeyPatch,
+        # No time loop: T carries no type/unit; ZYX still microns.
+        (
+            "ND2_dims_c2y32x32.nd2",
+            (None, None),
+            "micrometer",
+        ),
+        # Legacy file: no OME metadata, so units fall back to None while the
+        # semantic types are still derived from the (present) scale.
+        (
+            "ND2_aryeh_but3_cont200-1.nd2",
+            ("time", None),
+            None,
+        ),
+    ],
+)
+def test_dimension_properties(
+    filename: str,
+    expected_t: Tuple[object, object],
+    expected_space: object,
 ) -> None:
-    monkeypatch.setattr(
-        "bioio_nd2.reader.nd2.ND2File",
-        _fake_nd2_for_experiment([_make_timeloop(360000.0)]),
-    )
-
-    rdr = Reader.__new__(Reader)
-    rdr._fs = _FakeFS()
-    rdr._path = "example.nd2"
-
-    assert rdr.time_interval == timedelta(milliseconds=360000.0)
-
-
-def test_time_interval_none_without_timeloop(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setattr(
-        "bioio_nd2.reader.nd2.ND2File",
-        _fake_nd2_for_experiment([]),
-    )
-
-    rdr = Reader.__new__(Reader)
-    rdr._fs = _FakeFS()
-    rdr._path = "example.nd2"
-
-    assert rdr.time_interval is None
-
-
-def test_dimension_properties_attach_units_from_ome(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    # OME unit enums expose the symbol via ``.value``, which the shared
-    # registry parses (µm -> micrometer, s -> second).
-    pixels = SimpleNamespace(
-        physical_size_x_unit=SimpleNamespace(value="µm"),
-        physical_size_y_unit=SimpleNamespace(value="µm"),
-        physical_size_z_unit=SimpleNamespace(value="µm"),
-        time_increment_unit=SimpleNamespace(value="s"),
-    )
-    ome = SimpleNamespace(images=[SimpleNamespace(pixels=pixels)])
-
-    class FakeND2File:
-        def __init__(self, file: object) -> None:
-            pass
-
-        def __enter__(self) -> "FakeND2File":
-            return self
-
-        def __exit__(self, *args: object) -> None:
-            pass
-
-        @property
-        def experiment(self) -> List[Any]:
-            return [_make_timeloop(1000.0)]
-
-        def voxel_size(self) -> Tuple[float, float, float]:
-            return (0.5, 0.5, 2.0)
-
-        def ome_metadata(self) -> Any:
-            return ome
-
-    monkeypatch.setattr("bioio_nd2.reader.nd2.ND2File", FakeND2File)
-
-    rdr = Reader.__new__(Reader)
-    rdr._fs = _FakeFS()
-    rdr._path = "example.nd2"
+    rdr = Reader(LOCAL_RESOURCES_DIR / filename)
 
     dp = rdr.dimension_properties
 
-    assert dp.T.type == "time"
-    assert str(dp.T.unit) == "second"
+    expected_t_type, expected_t_unit = expected_t
+    assert dp.T.type == expected_t_type
+    assert (str(dp.T.unit) if dp.T.unit is not None else None) == expected_t_unit
+
+    # Channels never carry a spatial/temporal unit.
     assert dp.C.type is None
     assert dp.C.unit is None
+
     for axis in (dp.Z, dp.Y, dp.X):
         assert axis.type == "space"
-        assert str(axis.unit) == "micrometer"
+        assert (str(axis.unit) if axis.unit is not None else None) == expected_space
