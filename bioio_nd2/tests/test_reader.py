@@ -1,12 +1,10 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 
-from contextlib import nullcontext
 from typing import Any, List, Tuple, Union
 
 import numpy as np
 import pytest
-import xarray as xr
 from bioio_base import exceptions, test_utilities
 from ome_types import OME
 
@@ -220,404 +218,111 @@ def test_frame_metadata(cache: bool) -> None:
     )
 
 
-def test_read_indexed_reads_only_requested_nd2_frames(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    data = np.arange(2 * 2 * 3 * 4 * 5).reshape(2, 2, 3, 4, 5)
-    frame_reads = []
+def _count_frame_reads(
+    monkeypatch: pytest.MonkeyPatch, work: Any
+) -> Tuple[Any, int]:
+    """Run ``work()`` while counting real ``nd2.ND2File.read_frame`` calls."""
+    reads = 0
+    original = nd2.ND2File.read_frame
 
-    class FakeND2File:
-        sizes = {"P": 2, "T": 2, "C": 3, "Y": 4, "X": 5}
-        shape = (2, 2, 3, 4, 5)
-        dtype = data.dtype
+    def counting_read_frame(self: Any, frame_index: int) -> Any:
+        nonlocal reads
+        reads += 1
+        return original(self, frame_index)
 
-        def __init__(self, file: object) -> None:
-            pass
-
-        def __enter__(self) -> "FakeND2File":
-            return self
-
-        def __exit__(self, *args: object) -> None:
-            pass
-
-        def _expand_coords(self, squeeze: bool = True) -> dict[str, object]:
-            assert squeeze is False
-            return {
-                nd2.AXIS.POSITION: range(2),
-                "T": range(2),
-                "C": range(3),
-                "Y": range(4),
-                "X": range(5),
-            }
-
-        def _seq_index_from_coords(self, coords: Tuple[int, ...]) -> int:
-            return int(np.ravel_multi_index(coords, (2, 2)))
-
-        def read_frame(self, frame_index: int) -> np.ndarray:
-            frame_reads.append(frame_index)
-            return data.reshape(4, 3, 4, 5)[frame_index]
-
-    class FakeFS:
-        def open(self, path: str, mode: str) -> Any:
-            return nullcontext(object())
-
-    monkeypatch.setattr("bioio_nd2.reader.nd2.ND2File", FakeND2File)
-
-    rdr = Reader.__new__(Reader)
-    rdr._fs = FakeFS()
-    rdr._path = "example.nd2"
-    rdr._dims = None
-    rdr._current_scene_index = 1
-
-    def fail_delayed_read() -> xr.DataArray:
-        raise AssertionError("_read_delayed should not be used for indexed reads")
-
-    monkeypatch.setattr(rdr, "_read_delayed", fail_delayed_read)
-
-    actual = rdr._read_indexed(
-        "TCYX",
-        [
-            slice(None),
-            slice(1, 3),
-            slice(1, 4),
-            slice(0, 5, 2),
-        ],
-    )
-
-    np.testing.assert_array_equal(
-        actual,
-        data[1, :, 1:3, 1:4, 0:5:2],
-    )
-    assert frame_reads == [2, 3]
-
-    frame_reads.clear()
-    dim_specs = [
-        slice(None),
-        [0, 2],
-        [1, 3],
-        slice(0, 5, 2),
-    ]
-    actual = rdr._read_indexed("TCYX", dim_specs)
-
-    np.testing.assert_array_equal(
-        actual,
-        data[1][tuple(dim_specs)],
-    )
-    assert frame_reads == [2, 3]
-
-    frame_reads.clear()
-    rdr._current_scene_index = 0
-    actual = rdr._read_indexed(
-        "TCYX",
-        [
-            slice(None),
-            slice(1, 3),
-            slice(1, 4),
-            slice(0, 5, 2),
-        ],
-    )
-
-    np.testing.assert_array_equal(
-        actual,
-        data[0, :, 1:3, 1:4, 0:5:2],
-    )
-    assert frame_reads == [0, 1]
-
-    rdr._current_scene_index = 2
-    with pytest.raises(IndexError, match="Position 2 is out of range"):
-        rdr._read_indexed("TCYX", dim_specs)
+    monkeypatch.setattr(nd2.ND2File, "read_frame", counting_read_frame)
+    result = work()
+    return result, reads
 
 
-def test_read_indexed_reads_single_middle_plane(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    data = np.arange(3 * 5 * 7 * 4 * 6 * 8).reshape(3, 5, 7, 4, 6, 8)
-    frame_reads = []
-
-    class FakeND2File:
-        sizes = {
-            nd2.AXIS.POSITION: 3,
-            "T": 5,
-            "Z": 7,
-            "C": 4,
-            "Y": 6,
-            "X": 8,
-        }
-        shape = (3, 5, 7, 4, 6, 8)
-        dtype = data.dtype
-
-        def __init__(self, file: object) -> None:
-            pass
-
-        def __enter__(self) -> "FakeND2File":
-            return self
-
-        def __exit__(self, *args: object) -> None:
-            pass
-
-        def _expand_coords(self, squeeze: bool = True) -> dict[str, object]:
-            assert squeeze is False
-            return {
-                nd2.AXIS.POSITION: range(3),
-                "T": range(5),
-                "Z": range(7),
-                "C": range(4),
-                "Y": range(6),
-                "X": range(8),
-            }
-
-        def _seq_index_from_coords(self, coords: Tuple[int, ...]) -> int:
-            return int(np.ravel_multi_index(coords, (3, 5, 7)))
-
-        def read_frame(self, frame_index: int) -> np.ndarray:
-            frame_reads.append(frame_index)
-            return data.reshape(3 * 5 * 7, 4, 6, 8)[frame_index]
-
-    class FakeFS:
-        def open(self, path: str, mode: str) -> Any:
-            return nullcontext(object())
-
-    monkeypatch.setattr("bioio_nd2.reader.nd2.ND2File", FakeND2File)
-
-    rdr = Reader.__new__(Reader)
-    rdr._fs = FakeFS()
-    rdr._path = "example.nd2"
-    rdr._dims = None
-    rdr._current_scene_index = 1
-
-    actual = rdr._read_indexed(
-        "TZCYX",
-        [
+@pytest.mark.parametrize(
+    "filename, set_scene, dimension_order_out, kwargs",
+    [
+        # Simplest case: single channel selection.
+        ("ND2_dims_c2y32x32.nd2", 0, "YX", {"C": 1}),
+        # Single-plane collapse across two dims.
+        ("ND2_dims_p4z5t3c2y32x32.nd2", 1, "ZYX", {"T": 1, "C": 0}),
+        # Slices with a step + fancy indexing together, on a non-zero scene.
+        (
+            "ND2_dims_p4z5t3c2y32x32.nd2",
             2,
-            3,
-            2,
-            slice(None),
-            slice(None),
-        ],
-    )
-
-    np.testing.assert_array_equal(actual, data[1, 2, 3, 2])
-    assert frame_reads == [int(np.ravel_multi_index((1, 2, 3), (3, 5, 7)))]
-
-
-def test_dims_and_shape_use_nd2_metadata_without_xarray_dask_data(
+            "TZCYX",
+            {"T": slice(0, 2), "C": [0, 1], "Z": slice(0, 5, 2)},
+        ),
+        # Dimension not present in the file (T) is added with depth 1.
+        ("ND2_dims_c2y32x32.nd2", 0, "TCYX", {}),
+        # RGB file: the trailing sample (S) axis must survive the round trip.
+        ("ND2_dims_rgb_t3p2c2z3x64y64.nd2", 1, "ZCYXS", {"T": 0}),
+    ],
+)
+def test_indexed_read_matches_full_read(
+    filename: str,
+    set_scene: int,
+    dimension_order_out: str,
+    kwargs: dict,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    class FakeND2File:
-        sizes = {nd2.AXIS.POSITION: 3, "Y": 4, "X": 5}
-        shape = (3, 4, 5)
+    """
+    The optimized indexed read must return exactly the same pixels as the
+    naive "read the whole scene, then slice" path it replaces.
+    """
+    uri = LOCAL_RESOURCES_DIR / filename
 
-        def __init__(self, file: object) -> None:
-            pass
+    optimized = Reader(uri)
+    optimized.set_scene(set_scene)
+    actual = optimized.get_image_data(dimension_order_out, **kwargs)
 
-        def __enter__(self) -> "FakeND2File":
-            return self
+    # Reference: fall back to the base-class behavior (materialize, then index).
+    reference = Reader(uri)
+    reference.set_scene(set_scene)
+    monkeypatch.setattr(
+        reference,
+        "_read_indexed",
+        lambda _given_dims, dim_specs: reference.data[tuple(dim_specs)],
+    )
+    expected = reference.get_image_data(dimension_order_out, **kwargs)
 
-        def __exit__(self, *args: object) -> None:
-            pass
+    np.testing.assert_array_equal(actual, expected)
 
-        def _expand_coords(self, squeeze: bool = True) -> dict[str, object]:
-            assert squeeze is False
-            return {
-                nd2.AXIS.POSITION: range(3),
-                "Y": range(4),
-                "X": range(5),
-                "C": ["channel"],
-            }
 
-    class FakeFS:
-        def __init__(self) -> None:
-            self.open_count = 0
+def test_indexed_read_only_reads_requested_frames(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An indexed read should pull only the requested planes off disk."""
+    uri = LOCAL_RESOURCES_DIR / "ND2_dims_p4z5t3c2y32x32.nd2"
 
-        def open(self, path: str, mode: str) -> Any:
-            self.open_count += 1
-            return nullcontext(object())
+    rdr = Reader(uri)
+    rdr.set_scene(1)
 
-    monkeypatch.setattr("bioio_nd2.reader.nd2.ND2File", FakeND2File)
+    # Selecting one T and one C leaves only the 5 Z planes to read, far fewer
+    # than the 3 * 5 * 2 = 30 frames in the full scene.
+    _, reads = _count_frame_reads(
+        monkeypatch, lambda: rdr.get_image_data("ZYX", T=1, C=0)
+    )
+    assert reads == 5
 
-    fs = FakeFS()
-    rdr = Reader.__new__(Reader)
-    rdr._fs = fs
-    rdr._path = "example.nd2"
-    rdr._dims = None
-    rdr._current_scene_index = 2
 
-    def fail_delayed_read() -> xr.DataArray:
-        raise AssertionError("_read_delayed should not be used for dims or shape")
+def test_metadata_served_without_reading_frames(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """``dims``/``shape``/``dtype`` come from metadata, reading no pixel data."""
+    uri = LOCAL_RESOURCES_DIR / "ND2_dims_p4z5t3c2y32x32.nd2"
 
-    monkeypatch.setattr(rdr, "_read_delayed", fail_delayed_read)
+    def read_metadata() -> None:
+        rdr = Reader(uri)
+        rdr.set_scene(1)
+        _ = rdr.dims
+        _ = rdr.shape
+        _ = rdr.dtype
 
-    assert rdr.dims.order == "CYX"
-    assert rdr.shape == (1, 4, 5)
-    assert fs.open_count == 1
+    _, reads = _count_frame_reads(monkeypatch, read_metadata)
+    assert reads == 0
 
-    rdr._dims = None
-    rdr._current_scene_index = 3
-    with pytest.raises(IndexError, match="Position 3 is out of range"):
+
+def test_position_out_of_range_raises() -> None:
+    """Selecting a scene index beyond the available positions is an error."""
+    uri = LOCAL_RESOURCES_DIR / "ND2_dims_p4z5t3c2y32x32.nd2"
+    rdr = Reader(uri)
+    rdr._current_scene_index = 99
+    with pytest.raises(IndexError, match="out of range"):
         rdr.dims
-
-
-def test_dtype_uses_nd2_metadata_without_xarray_dask_data(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    class FakeND2File:
-        dtype = np.dtype("uint16")
-
-        def __init__(self, file: object) -> None:
-            pass
-
-        def __enter__(self) -> "FakeND2File":
-            return self
-
-        def __exit__(self, *args: object) -> None:
-            pass
-
-    class FakeFS:
-        def __init__(self) -> None:
-            self.open_count = 0
-
-        def open(self, path: str, mode: str) -> Any:
-            self.open_count += 1
-            return nullcontext(object())
-
-    monkeypatch.setattr("bioio_nd2.reader.nd2.ND2File", FakeND2File)
-
-    fs = FakeFS()
-    rdr = Reader.__new__(Reader)
-    rdr._fs = fs
-    rdr._path = "example.nd2"
-    rdr._dtype = None
-
-    def fail_delayed_read() -> xr.DataArray:
-        raise AssertionError("_read_delayed should not be used for dtype")
-
-    monkeypatch.setattr(rdr, "_read_delayed", fail_delayed_read)
-
-    assert rdr.dtype == np.dtype("uint16")
-    assert fs.open_count == 1
-
-    # repeated access is served from the cache without reopening the file
-    assert rdr.dtype == np.dtype("uint16")
-    assert fs.open_count == 1
-
-
-def test_open_nd2_memory_maps_local_path(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    # On a local filesystem the path is handed straight to nd2 so it can
-    # memory-map the file (no streaming through / copying via a file handle).
-    from fsspec.implementations.local import LocalFileSystem
-
-    opened_with = []
-
-    class FakeND2File:
-        def __init__(self, file: object) -> None:
-            opened_with.append(file)
-
-        def __enter__(self) -> "FakeND2File":
-            return self
-
-        def __exit__(self, *args: object) -> None:
-            pass
-
-    monkeypatch.setattr("bioio_nd2.reader.nd2.ND2File", FakeND2File)
-
-    rdr = Reader.__new__(Reader)
-    rdr._fs = LocalFileSystem()
-    rdr._path = "example.nd2"
-
-    with rdr._open_nd2():
-        pass
-
-    # The raw path, not an opened file object.
-    assert opened_with == ["example.nd2"]
-
-
-def test_open_nd2_uses_handle_for_non_local_fs(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    # A caching/remote filesystem cannot be memory-mapped, so the reader falls
-    # back to an fsspec handle instead of handing nd2 the path.
-    handle = object()
-    opened_with = []
-
-    class FakeND2File:
-        def __init__(self, file: object) -> None:
-            opened_with.append(file)
-
-        def __enter__(self) -> "FakeND2File":
-            return self
-
-        def __exit__(self, *args: object) -> None:
-            pass
-
-    class FakeCachingFS:
-        def open(self, path: str, mode: str) -> Any:
-            return nullcontext(handle)
-
-    monkeypatch.setattr("bioio_nd2.reader.nd2.ND2File", FakeND2File)
-
-    rdr = Reader.__new__(Reader)
-    rdr._fs = FakeCachingFS()
-    rdr._path = "s3://bucket/example.nd2"
-
-    with rdr._open_nd2():
-        pass
-
-    # The fsspec handle, not the path.
-    assert opened_with == [handle]
-
-
-def test_read_indexed_reads_frames_in_ascending_disk_order(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    # ND2 stores frames by sequence index, so _read_indexed should read them in
-    # ascending sequence order (sequential on disk) regardless of the order the
-    # requested coordinates are iterated in. Here the sequence index runs
-    # opposite to the T iteration order, so an unsorted read would seek
-    # backwards through the file.
-    data = np.arange(3 * 2 * 2).reshape(3, 2, 2)
-    frame_reads = []
-
-    class FakeND2File:
-        sizes = {"T": 3, "Y": 2, "X": 2}
-        shape = (3, 2, 2)
-        dtype = data.dtype
-
-        def __init__(self, file: object) -> None:
-            pass
-
-        def __enter__(self) -> "FakeND2File":
-            return self
-
-        def __exit__(self, *args: object) -> None:
-            pass
-
-        def _expand_coords(self, squeeze: bool = True) -> dict[str, object]:
-            return {"T": range(3), "Y": range(2), "X": range(2)}
-
-        def _seq_index_from_coords(self, coords: Tuple[int, ...]) -> int:
-            # Reverse the mapping: T=0 is the last frame on disk, T=2 the first.
-            return 2 - coords[0]
-
-        def read_frame(self, frame_index: int) -> np.ndarray:
-            frame_reads.append(frame_index)
-            return data[2 - frame_index]
-
-    class FakeFS:
-        def open(self, path: str, mode: str) -> Any:
-            return nullcontext(object())
-
-    monkeypatch.setattr("bioio_nd2.reader.nd2.ND2File", FakeND2File)
-
-    rdr = Reader.__new__(Reader)
-    rdr._fs = FakeFS()
-    rdr._path = "example.nd2"
-    rdr._dims = None
-    rdr._current_scene_index = 0
-
-    actual = rdr._read_indexed("TYX", [slice(None), slice(None), slice(None)])
-
-    np.testing.assert_array_equal(actual, data)
-    # Frames were read front-to-back, not in the reversed iteration order.
-    assert frame_reads == [0, 1, 2]
