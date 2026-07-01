@@ -499,3 +499,125 @@ def test_dtype_uses_nd2_metadata_without_xarray_dask_data(
     # repeated access is served from the cache without reopening the file
     assert rdr.dtype == np.dtype("uint16")
     assert fs.open_count == 1
+
+
+def test_open_nd2_memory_maps_local_path(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # On a local filesystem the path is handed straight to nd2 so it can
+    # memory-map the file (no streaming through / copying via a file handle).
+    from fsspec.implementations.local import LocalFileSystem
+
+    opened_with = []
+
+    class FakeND2File:
+        def __init__(self, file: object) -> None:
+            opened_with.append(file)
+
+        def __enter__(self) -> "FakeND2File":
+            return self
+
+        def __exit__(self, *args: object) -> None:
+            pass
+
+    monkeypatch.setattr("bioio_nd2.reader.nd2.ND2File", FakeND2File)
+
+    rdr = Reader.__new__(Reader)
+    rdr._fs = LocalFileSystem()
+    rdr._path = "example.nd2"
+
+    with rdr._open_nd2():
+        pass
+
+    # The raw path, not an opened file object.
+    assert opened_with == ["example.nd2"]
+
+
+def test_open_nd2_uses_handle_for_non_local_fs(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # A caching/remote filesystem cannot be memory-mapped, so the reader falls
+    # back to an fsspec handle instead of handing nd2 the path.
+    handle = object()
+    opened_with = []
+
+    class FakeND2File:
+        def __init__(self, file: object) -> None:
+            opened_with.append(file)
+
+        def __enter__(self) -> "FakeND2File":
+            return self
+
+        def __exit__(self, *args: object) -> None:
+            pass
+
+    class FakeCachingFS:
+        def open(self, path: str, mode: str) -> Any:
+            return nullcontext(handle)
+
+    monkeypatch.setattr("bioio_nd2.reader.nd2.ND2File", FakeND2File)
+
+    rdr = Reader.__new__(Reader)
+    rdr._fs = FakeCachingFS()
+    rdr._path = "s3://bucket/example.nd2"
+
+    with rdr._open_nd2():
+        pass
+
+    # The fsspec handle, not the path.
+    assert opened_with == [handle]
+
+
+def test_read_indexed_reads_frames_in_ascending_disk_order(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # ND2 stores frames by sequence index, so _read_indexed should read them in
+    # ascending sequence order (sequential on disk) regardless of the order the
+    # requested coordinates are iterated in. Here the sequence index runs
+    # opposite to the T iteration order, so an unsorted read would seek
+    # backwards through the file.
+    data = np.arange(3 * 2 * 2).reshape(3, 2, 2)
+    frame_reads = []
+
+    class FakeND2File:
+        sizes = {"T": 3, "Y": 2, "X": 2}
+        shape = (3, 2, 2)
+        dtype = data.dtype
+
+        def __init__(self, file: object) -> None:
+            pass
+
+        def __enter__(self) -> "FakeND2File":
+            return self
+
+        def __exit__(self, *args: object) -> None:
+            pass
+
+        def _expand_coords(self, squeeze: bool = True) -> dict[str, object]:
+            return {"T": range(3), "Y": range(2), "X": range(2)}
+
+        def _seq_index_from_coords(self, coords: Tuple[int, ...]) -> int:
+            # Reverse the mapping: T=0 is the last frame on disk, T=2 the first.
+            return 2 - coords[0]
+
+        def read_frame(self, frame_index: int) -> np.ndarray:
+            frame_reads.append(frame_index)
+            return data[2 - frame_index]
+
+    class FakeFS:
+        def open(self, path: str, mode: str) -> Any:
+            return nullcontext(object())
+
+    monkeypatch.setattr("bioio_nd2.reader.nd2.ND2File", FakeND2File)
+
+    rdr = Reader.__new__(Reader)
+    rdr._fs = FakeFS()
+    rdr._path = "example.nd2"
+    rdr._dims = None
+    rdr._current_scene_index = 0
+
+    actual = rdr._read_indexed("TYX", [slice(None), slice(None), slice(None)])
+
+    np.testing.assert_array_equal(actual, data)
+    # Frames were read front-to-back, not in the reversed iteration order.
+    assert frame_reads == [0, 1, 2]

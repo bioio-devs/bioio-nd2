@@ -1,8 +1,9 @@
 import logging
 import re
+from contextlib import contextmanager
 from itertools import product
 from numbers import Integral
-from typing import Any, Dict, Optional, Tuple, cast
+from typing import Any, Dict, Iterator, Optional, Tuple, cast
 
 import nd2
 import numpy as np
@@ -91,11 +92,31 @@ class Reader(reader.Reader):
 
         self._is_supported_image(self._fs, self._path)
 
+    @contextmanager
+    def _open_nd2(self) -> Iterator[nd2.ND2File]:
+        """Open the backing ND2 file, memory-mapping it when possible.
+
+        For a local filesystem the path is handed directly to ``nd2.ND2File`` so
+        the SDK memory-maps the file. Repeated ``read_frame`` calls then read
+        from OS-cached pages and benefit from kernel read-ahead, instead of
+        streaming every plane through a Python file object. Memory-mapping maps
+        the file in place and never copies it, which matters for very large ND2s
+        that cannot be staged to local disk. Remote sources (a
+        ``CachingFileSystem``) cannot be memory-mapped, so they fall back to an
+        fsspec handle.
+        """
+        if isinstance(self._fs, LocalFileSystem):
+            with nd2.ND2File(self._path) as rdr:
+                yield rdr
+        else:
+            with self._fs.open(self._path, "rb") as f:
+                with nd2.ND2File(f) as rdr:
+                    yield rdr
+
     @property
     def scenes(self) -> Tuple[str, ...]:
-        with self._fs.open(self._path, "rb") as f:
-            with nd2.ND2File(f) as rdr:
-                return tuple(rdr._position_names())
+        with self._open_nd2() as rdr:
+            return tuple(rdr._position_names())
 
     @property
     def shape(self) -> Tuple[int, ...]:
@@ -116,9 +137,8 @@ class Reader(reader.Reader):
             Data-type of the image array's elements.
         """
         if self._dtype is None:
-            with self._fs.open(self._path, "rb") as f:
-                with nd2.ND2File(f) as rdr:
-                    self._dtype = rdr.dtype
+            with self._open_nd2() as rdr:
+                self._dtype = rdr.dtype
 
         return self._dtype
 
@@ -148,12 +168,11 @@ class Reader(reader.Reader):
         shape: Tuple[int, ...]
             The size of each dimension, in the same order as ``dims``.
         """
-        with self._fs.open(self._path, "rb") as f:
-            with nd2.ND2File(f) as rdr:
-                dims, shape = self._dims_and_shape_from_nd2(
-                    rdr,
-                    self.current_scene_index,
-                )
+        with self._open_nd2() as rdr:
+            dims, shape = self._dims_and_shape_from_nd2(
+                rdr,
+                self.current_scene_index,
+            )
 
         return tuple(dims), tuple(shape)
 
@@ -356,78 +375,84 @@ class Reader(reader.Reader):
             The indexed image data in native (reduced) dimension order.
         """
         position = self.current_scene_index
-        with self._fs.open(self._path, "rb") as f:
-            with nd2.ND2File(f) as rdr:
-                dims, shape = self._dims_and_shape_from_nd2(
-                    rdr,
-                    position,
-                )
-                shape_by_dim = dict(zip(dims, shape))
-                frame_coord_dims = nd2.AXIS.frame_coords()
-                coord_dims = [dim for dim in rdr.sizes if dim not in frame_coord_dims]
-                frame_dims = [dim for dim in given_dims if dim in frame_coord_dims]
-                current_frame_dims = [
-                    dim for dim in rdr.sizes if dim in frame_coord_dims
-                ]
+        with self._open_nd2() as rdr:
+            dims, shape = self._dims_and_shape_from_nd2(
+                rdr,
+                position,
+            )
+            shape_by_dim = dict(zip(dims, shape))
+            frame_coord_dims = nd2.AXIS.frame_coords()
+            coord_dims = [dim for dim in rdr.sizes if dim not in frame_coord_dims]
+            frame_dims = [dim for dim in given_dims if dim in frame_coord_dims]
+            current_frame_dims = [dim for dim in rdr.sizes if dim in frame_coord_dims]
 
-                selected_indices = {
-                    dim: self._indices_from_dim_spec(
-                        dim_specs[dim_index],
-                        shape_by_dim[dim],
-                    )
-                    for dim_index, dim in enumerate(given_dims)
+            selected_indices = {
+                dim: self._indices_from_dim_spec(
+                    dim_specs[dim_index],
+                    shape_by_dim[dim],
+                )
+                for dim_index, dim in enumerate(given_dims)
+            }
+            subset_shape = tuple(len(selected_indices[dim]) for dim in given_dims)
+            subset = np.empty(subset_shape, dtype=rdr.dtype)
+            local_indexer = tuple(
+                self._local_dim_spec(dim_specs[dim_index], subset_shape[dim_index])
+                for dim_index in range(len(given_dims))
+            )
+
+            if 0 in subset_shape:
+                return subset[local_indexer]
+
+            coord_choices = []
+            for dim in coord_dims:
+                if dim == nd2.AXIS.POSITION:
+                    coord_choices.append([(0, position)])
+                else:
+                    coord_choices.append(list(enumerate(selected_indices[dim])))
+
+            # Resolve every requested plane to its ND2 sequence index up front,
+            # paired with where it lands in ``subset``. ND2 stores frames on disk
+            # in sequence-index order, so reading them sorted by that index keeps
+            # disk access sequential (front-to-back): contiguous runs coalesce
+            # under OS read-ahead instead of forcing a seek per plane. The
+            # dimension-iteration order is not guaranteed to match on-disk order,
+            # so without this sort a shard's reads can bounce around the file.
+            planes = []
+            for coord_selection in product(*coord_choices):
+                coord_indexes = tuple(index for _, index in coord_selection)
+                if not coord_dims:
+                    frame_index = 0
+                else:
+                    frame_index = cast(int, rdr._seq_index_from_coords(coord_indexes))
+
+                coord_ordinals = {
+                    dim: ordinal
+                    for dim, (ordinal, _) in zip(coord_dims, coord_selection)
+                    if dim != nd2.AXIS.POSITION
                 }
-                subset_shape = tuple(len(selected_indices[dim]) for dim in given_dims)
-                subset = np.empty(subset_shape, dtype=rdr.dtype)
-                local_indexer = tuple(
-                    self._local_dim_spec(dim_specs[dim_index], subset_shape[dim_index])
-                    for dim_index in range(len(given_dims))
+                subset_index = tuple(
+                    coord_ordinals[dim] if dim in coord_ordinals else slice(None)
+                    for dim in given_dims
+                )
+                planes.append((frame_index, subset_index))
+
+            for frame_index, subset_index in sorted(planes, key=lambda p: p[0]):
+                frame = np.asarray(rdr.read_frame(frame_index))
+                frame = self._reshape_frame_to_dims(
+                    frame,
+                    current_frame_dims.copy(),
+                    frame_dims,
+                    shape_by_dim,
                 )
 
-                if 0 in subset_shape:
-                    return subset[local_indexer]
-
-                coord_choices = []
-                for dim in coord_dims:
-                    if dim == nd2.AXIS.POSITION:
-                        coord_choices.append([(0, position)])
-                    else:
-                        coord_choices.append(list(enumerate(selected_indices[dim])))
-
-                for coord_selection in product(*coord_choices):
-                    coord_indexes = tuple(index for _, index in coord_selection)
-                    if not coord_dims:
-                        frame_index = 0
-                    else:
-                        frame_index = cast(
-                            int, rdr._seq_index_from_coords(coord_indexes)
-                        )
-
-                    frame = np.asarray(rdr.read_frame(frame_index))
-                    frame = self._reshape_frame_to_dims(
+                for frame_axis, dim in enumerate(frame_dims):
+                    frame = np.take(
                         frame,
-                        current_frame_dims.copy(),
-                        frame_dims,
-                        shape_by_dim,
+                        selected_indices[dim],
+                        axis=frame_axis,
                     )
 
-                    for frame_axis, dim in enumerate(frame_dims):
-                        frame = np.take(
-                            frame,
-                            selected_indices[dim],
-                            axis=frame_axis,
-                        )
-
-                    coord_ordinals = {
-                        dim: ordinal
-                        for dim, (ordinal, _) in zip(coord_dims, coord_selection)
-                        if dim != nd2.AXIS.POSITION
-                    }
-                    subset_index = tuple(
-                        coord_ordinals[dim] if dim in coord_ordinals else slice(None)
-                        for dim in given_dims
-                    )
-                    subset[subset_index] = frame
+                subset[subset_index] = frame
 
         return subset[local_indexer]
 
@@ -466,9 +491,8 @@ class Reader(reader.Reader):
         We currently do not handle unit attachment to these values. Please see the file
         metadata for unit information.
         """
-        with self._fs.open(self._path, "rb") as f:
-            with nd2.ND2File(f) as rdr:
-                return types.PhysicalPixelSizes(*rdr.voxel_size()[::-1])
+        with self._open_nd2() as rdr:
+            return types.PhysicalPixelSizes(*rdr.voxel_size()[::-1])
 
     @property
     def binning(self) -> str | None:
@@ -478,7 +502,7 @@ class Reader(reader.Reader):
         binning : str | None
             Binning value reported by the ND2File metadata, e.g., "1x1".
         """
-        with self._fs.open(self._path, "rb") as f, nd2.ND2File(f) as rdr:
+        with self._open_nd2() as rdr:
             desc = rdr.text_info.get("description", "")
             match = re.search(r"\bBinning:\s*(\d+x\d+)", desc)
             return match.group(1) if match else None
@@ -500,9 +524,8 @@ class Reader(reader.Reader):
             No metadata transformer available.
         """
         if hasattr(nd2.ND2File, "ome_metadata"):
-            with self._fs.open(self._path, "rb") as f:
-                with nd2.ND2File(f) as rdr:
-                    return rdr.ome_metadata()
+            with self._open_nd2() as rdr:
+                return rdr.ome_metadata()
         raise NotImplementedError()
 
     def _get_scene_to_well_map(self) -> Dict[int, WellPosition | None]:
@@ -520,14 +543,13 @@ class Reader(reader.Reader):
             self._scene_to_well_map = {i: None for i in range(len(self.scenes))}
             return self._scene_to_well_map
 
-        with self._fs.open(self._path, "rb") as f:
-            with nd2.ND2File(f) as rdr:
-                wells = self._plate.generate_wells()
+        with self._open_nd2() as rdr:
+            wells = self._plate.generate_wells()
 
-                position_xy = extract_position_stage_xy_um(rdr)
-                scene_to_position = extract_scene_to_position_index(
-                    rdr, num_scenes=len(self.scenes)
-                )
+            position_xy = extract_position_stage_xy_um(rdr)
+            scene_to_position = extract_scene_to_position_index(
+                rdr, num_scenes=len(self.scenes)
+            )
 
         self._scene_to_well_map = map_scenes_to_wells(
             scene_to_position,
@@ -592,13 +614,12 @@ class Reader(reader.Reader):
             return metadata
 
         try:
-            with self._fs.open(self._path, "rb") as fh:
-                with nd2.ND2File(fh) as f:
-                    ri = f.metadata.channels[0].microscope.immersionRefractiveIndex
+            with self._open_nd2() as f:
+                ri = f.metadata.channels[0].microscope.immersionRefractiveIndex
 
-                    # 1.33 is the refractive index of water
-                    if ri is not None and abs(float(ri) - 1.333) <= 1e-3:
-                        metadata.objective = f"{metadata.objective}Water"
+                # 1.33 is the refractive index of water
+                if ri is not None and abs(float(ri) - 1.333) <= 1e-3:
+                    metadata.objective = f"{metadata.objective}Water"
 
         except Exception as err:
             log.warning(f"Failed to patch ND2 objective immersion suffix: {err}")
