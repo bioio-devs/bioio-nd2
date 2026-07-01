@@ -148,204 +148,39 @@ class Reader(reader.Reader):
         Returns
         -------
         dims: Dimensions
-            Object with the paired dimension names and their sizes.
+            Paired dimension names and their sizes.
         """
         if self._dims is None:
-            dims, shape = self._read_dims_and_shape()
-            self._dims = Dimensions(dims=dims, shape=shape)
+            with self._open_nd2() as rdr:
+                dims = list(rdr.sizes)
+                shape = list(rdr.shape)
+                coords = rdr._expand_coords(squeeze=False)
+
+                for missing_dim in set(coords).difference(dims):
+                    dims.insert(0, missing_dim)
+                    shape.insert(0, len(coords[missing_dim]))
+
+                position = self.current_scene_index
+                try:
+                    position_index = dims.index(nd2.AXIS.POSITION)
+                except ValueError:
+                    if position and position > 0:
+                        raise IndexError(
+                            f"Position {position} is out of range. "
+                            f"Only 1 position available"
+                        )
+                else:
+                    if position is not None and position >= shape[position_index]:
+                        raise IndexError(
+                            f"Position {position} is out of range. "
+                            f"Only {shape[position_index]} positions available"
+                        )
+                    dims.pop(position_index)
+                    shape.pop(position_index)
+
+            self._dims = Dimensions(dims=tuple(dims), shape=tuple(shape))
 
         return self._dims
-
-    def _read_dims_and_shape(self) -> Tuple[Tuple[str, ...], Tuple[int, ...]]:
-        """
-        Read the dimension names and sizes for the current scene from the ND2
-        metadata, without constructing the dask-backed xarray.
-
-        Returns
-        -------
-        dims: Tuple[str, ...]
-            The ordered dimension names for the current scene.
-        shape: Tuple[int, ...]
-            The size of each dimension, in the same order as ``dims``.
-        """
-        with self._open_nd2() as rdr:
-            dims, shape = self._dims_and_shape_from_nd2(
-                rdr,
-                self.current_scene_index,
-            )
-
-        return tuple(dims), tuple(shape)
-
-    @staticmethod
-    def _dims_and_shape_from_nd2(
-        rdr: nd2.ND2File,
-        position: int | None = None,
-    ) -> Tuple[list[str], list[int]]:
-        """
-        Derive the dimension names and sizes from an open ND2 file, dropping the
-        position axis for the requested scene.
-
-        Parameters
-        ----------
-        rdr: nd2.ND2File
-            An open ND2 file to read dimension metadata from.
-        position: int | None
-            The scene (position) index to select. When the file has a position
-            axis it is removed from the returned dims/shape. Defaults to None.
-
-        Returns
-        -------
-        dims: list[str]
-            The ordered dimension names, excluding the position axis.
-        shape: list[int]
-            The size of each dimension, in the same order as ``dims``.
-
-        Raises
-        ------
-        IndexError
-            If ``position`` is out of range for the available positions.
-        """
-        dims = list(rdr.sizes)
-        shape = list(rdr.shape)
-        coords = rdr._expand_coords(squeeze=False)
-
-        for missing_dim in set(coords).difference(dims):
-            dims.insert(0, missing_dim)
-            shape.insert(0, len(coords[missing_dim]))
-
-        try:
-            position_index = dims.index(nd2.AXIS.POSITION)
-        except ValueError:
-            if position and position > 0:
-                raise IndexError(
-                    f"Position {position} is out of range. Only 1 position available"
-                )
-        else:
-            if position is not None and position >= shape[position_index]:
-                raise IndexError(
-                    f"Position {position} is out of range. "
-                    f"Only {shape[position_index]} positions available"
-                )
-
-            shape[position_index] = 1
-            dims.pop(position_index)
-            shape.pop(position_index)
-
-        return dims, shape
-
-    @staticmethod
-    def _indices_from_dim_spec(dim_spec: Any, size: int) -> list[int]:
-        """
-        Resolve a single-dimension getitem spec into the concrete list of
-        source indices it selects.
-
-        Parameters
-        ----------
-        dim_spec: Any
-            The getitem operation for one dimension (an integer, slice, range,
-            tuple, or list of integers).
-        size: int
-            The size of the dimension being indexed.
-
-        Returns
-        -------
-        indices: list[int]
-            The selected indices into the dimension.
-
-        Raises
-        ------
-        TypeError
-            If ``dim_spec`` is not a supported indexer type.
-        """
-        dim_range = range(size)
-        if isinstance(dim_spec, Integral):
-            return [dim_range[int(dim_spec)]]
-
-        if isinstance(dim_spec, slice):
-            return list(dim_range[dim_spec])
-
-        if isinstance(dim_spec, range):
-            dim_spec = list(dim_spec)
-
-        if isinstance(dim_spec, tuple):
-            dim_spec = list(dim_spec)
-
-        if isinstance(dim_spec, list):
-            return [dim_range[int(index)] for index in dim_spec]
-
-        raise TypeError(f"Unsupported dimension indexer: {type(dim_spec).__name__}")
-
-    @staticmethod
-    def _local_dim_spec(dim_spec: Any, size: int) -> Any:
-        """
-        Translate a source-dimension getitem spec into the equivalent indexer
-        for the gathered subset array, which is already reduced to the selected
-        indices.
-
-        Parameters
-        ----------
-        dim_spec: Any
-            The original getitem operation for one dimension.
-        size: int
-            The size of the dimension in the gathered subset array.
-
-        Returns
-        -------
-        local_spec: Any
-            The indexer to apply to the subset array: ``0`` for an integer
-            spec (to drop the axis), ``slice(None)`` for a slice, or the full
-            list of local indices otherwise.
-        """
-        if isinstance(dim_spec, Integral):
-            return 0
-
-        if isinstance(dim_spec, slice):
-            return slice(None)
-
-        return list(range(size))
-
-    @staticmethod
-    def _reshape_frame_to_dims(
-        frame: np.ndarray,
-        current_dims: list[str],
-        target_dims: list[str],
-        shape_by_dim: Dict[str, int],
-    ) -> np.ndarray:
-        """
-        Reshape and transpose a raw ND2 frame so its axes match the requested
-        target dimension order, inserting size-1 axes for any missing dims.
-
-        Parameters
-        ----------
-        frame: np.ndarray
-            The raw frame data as read from the ND2 file.
-        current_dims: list[str]
-            The dimension names currently present in ``frame``, in order. This
-            list is mutated in place as axes are inserted.
-        target_dims: list[str]
-            The desired dimension names, in order, for the returned frame.
-        shape_by_dim: Dict[str, int]
-            Mapping of dimension name to its size, used to reshape ``frame``.
-
-        Returns
-        -------
-        frame: np.ndarray
-            The frame reshaped and transposed to match ``target_dims``.
-        """
-        if current_dims:
-            frame = frame.reshape(tuple(shape_by_dim[dim] for dim in current_dims))
-        else:
-            frame = frame.reshape(())
-
-        for dim in target_dims:
-            if dim not in current_dims:
-                frame = np.expand_dims(frame, axis=0)
-                current_dims.insert(0, dim)
-
-        if current_dims != target_dims:
-            frame = frame.transpose([current_dims.index(dim) for dim in target_dims])
-
-        return frame
 
     def _read_delayed(self) -> xr.DataArray:
         return self._xarr_reformat(delayed=True)
@@ -375,29 +210,23 @@ class Reader(reader.Reader):
             The indexed image data in native (reduced) dimension order.
         """
         position = self.current_scene_index
+        shape_by_dim = dict(zip(self.dims.order, self.dims.shape))
         with self._open_nd2() as rdr:
-            dims, shape = self._dims_and_shape_from_nd2(
-                rdr,
-                position,
-            )
-            shape_by_dim = dict(zip(dims, shape))
+            # nd2 splits dims into per-frame axes (C/Y/X/S, returned by
+            # read_frame) and loop axes (P/T/Z, addressed by sequence index).
             frame_coord_dims = nd2.AXIS.frame_coords()
             coord_dims = [dim for dim in rdr.sizes if dim not in frame_coord_dims]
             frame_dims = [dim for dim in given_dims if dim in frame_coord_dims]
-            current_frame_dims = [dim for dim in rdr.sizes if dim in frame_coord_dims]
 
+            # Source indices each spec selects
             selected_indices = {
-                dim: self._indices_from_dim_spec(
-                    dim_specs[dim_index],
-                    shape_by_dim[dim],
-                )
-                for dim_index, dim in enumerate(given_dims)
+                dim: np.atleast_1d(np.arange(shape_by_dim[dim])[spec]).tolist()
+                for dim, spec in zip(given_dims, dim_specs)
             }
             subset_shape = tuple(len(selected_indices[dim]) for dim in given_dims)
             subset = np.empty(subset_shape, dtype=rdr.dtype)
             local_indexer = tuple(
-                self._local_dim_spec(dim_specs[dim_index], subset_shape[dim_index])
-                for dim_index in range(len(given_dims))
+                0 if isinstance(spec, Integral) else slice(None) for spec in dim_specs
             )
 
             if 0 in subset_shape:
@@ -410,13 +239,8 @@ class Reader(reader.Reader):
                 else:
                     coord_choices.append(list(enumerate(selected_indices[dim])))
 
-            # Resolve every requested plane to its ND2 sequence index up front,
-            # paired with where it lands in ``subset``. ND2 stores frames on disk
-            # in sequence-index order, so reading them sorted by that index keeps
-            # disk access sequential (front-to-back): contiguous runs coalesce
-            # under OS read-ahead instead of forcing a seek per plane. The
-            # dimension-iteration order is not guaranteed to match on-disk order,
-            # so without this sort a shard's reads can bounce around the file.
+            # Map each requested plane to its (sequence index, destination in
+            # subset).
             planes = []
             for coord_selection in product(*coord_choices):
                 coord_indexes = tuple(index for _, index in coord_selection)
@@ -437,12 +261,10 @@ class Reader(reader.Reader):
                 planes.append((frame_index, subset_index))
 
             for frame_index, subset_index in sorted(planes, key=lambda p: p[0]):
-                frame = np.asarray(rdr.read_frame(frame_index))
-                frame = self._reshape_frame_to_dims(
-                    frame,
-                    current_frame_dims.copy(),
-                    frame_dims,
-                    shape_by_dim,
+                # reshape prepends size-1 axes for any singleton frame dims
+                # missing from read_frame's output.
+                frame = np.asarray(rdr.read_frame(frame_index)).reshape(
+                    tuple(shape_by_dim[dim] for dim in frame_dims)
                 )
 
                 for frame_axis, dim in enumerate(frame_dims):
