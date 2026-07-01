@@ -249,7 +249,7 @@ def test_indexed_read_matches_full_read(
     dim_specs: list,
 ) -> None:
     """
-    Checks that slice read matches full data slice 
+    Checks that slice read matches full data slice
     """
     uri = LOCAL_RESOURCES_DIR / filename
 
