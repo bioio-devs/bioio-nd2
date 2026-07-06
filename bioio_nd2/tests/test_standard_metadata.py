@@ -39,7 +39,7 @@ from .conftest import LOCAL_RESOURCES_DIR
                 "Pixel Size Y": 0.652452890023035,
                 "Pixel Size Z": 1.0,
                 "Position Index": None,
-                "Row": "D",
+                "Row": "4",
                 "Timelapse": True,
                 "Timelapse Interval": datetime.timedelta(
                     seconds=18, microseconds=495260
@@ -76,7 +76,7 @@ from .conftest import LOCAL_RESOURCES_DIR
                 "Pixel Size Y": 0.652452890023035,
                 "Pixel Size Z": 1.0,
                 "Position Index": None,
-                "Row": "D",
+                "Row": "4",
                 "Timelapse": True,
                 "Timelapse Interval": datetime.timedelta(
                     seconds=4, microseconds=293375
@@ -115,7 +115,7 @@ from .conftest import LOCAL_RESOURCES_DIR
                 "Pixel Size Y": 0.108333333333333,
                 "Pixel Size Z": 0.5,
                 "Position Index": None,
-                "Row": "E",
+                "Row": "5",
                 "Timelapse": False,
                 "Timelapse Interval": None,
                 "Total Time Duration": datetime.timedelta(microseconds=245184),
@@ -140,25 +140,25 @@ def test_nd2_standard_metadata(filename: str, expected: dict[str, Any]) -> None:
     "filename, scene_index, expected_row, expected_col",
     [
         # Case 1: ND2 file without an XYPosLoop. The stage position is
-        # recovered from the events table and lands inside well D6.
+        # recovered from the events table and lands inside well row 4, col 6.
         (
             "ND2_maxime_BF007.nd2",
             0,
-            "D",
+            "4",
             "6",
         ),
-        # Case 2: Plate scan file, scene maps to E3
+        # Case 2: Plate scan file, scene maps to row 5, col 3
         (
             "ND2_dims_rgb_t3p2c2z3x64y64.nd2",
             0,
-            "E",
+            "5",
             "3",
         ),
-        # Case 3: Same file, different scene maps to E2
+        # Case 3: Same file, different scene maps to row 5, col 2
         (
             "ND2_dims_rgb_t3p2c2z3x64y64.nd2",
             1,
-            "E",
+            "5",
             "2",
         ),
     ],

@@ -18,7 +18,8 @@ class WellPosition:
     """
     Logical well identifier.
 
-    This represents a *logical* plate position (e.g. "A1", "H12") and does
+    This represents a *logical* plate position (e.g. row "1" col "1",
+    row "8" col "12") and does
     not encode any physical geometry. It is intentionally lightweight so it
     can be stored directly in standardized metadata.
     """
@@ -101,7 +102,7 @@ class Plate:
         Human-readable identifier for the plate geometry (e.g. "96", "384").
 
     rows : List[str]
-        Ordered list of row identifiers (e.g. ["A", "B", ..., "H"]).
+        Ordered list of row identifiers (e.g. ["1", "2", ..., "8"]).
         The order defines the physical row layout on the plate.
 
     cols : List[str]
@@ -229,7 +230,7 @@ class Plate:
 # Standard 96-well plate geometry.
 PLATE_96 = Plate(
     name="96",
-    rows=list("ABCDEFGH")[::-1],
+    rows=[str(i) for i in range(1, 9)][::-1],
     cols=[str(i) for i in range(1, 13)],
     plate_width_mm=126.6,
     plate_height_mm=85.7,
