@@ -1,6 +1,7 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 
+from datetime import timedelta
 from typing import Any, List, Tuple, Union
 
 import numpy as np
@@ -216,6 +217,75 @@ def test_frame_metadata(cache: bool) -> None:
     assert isinstance(
         rdr.xarray_data.attrs["unprocessed"]["frame"], nd2.structures.FrameMetadata
     )
+
+
+@pytest.mark.parametrize(
+    "filename, expected_interval",
+    [
+        # Time-lapse files carry a TimeLoop, so time_interval is populated.
+        ("ND2_jonas_header_test2.nd2", timedelta(seconds=5)),
+        ("ND2_dims_rgb_t3p2c2z3x64y64.nd2", timedelta(seconds=1)),
+        ("ND2_dims_t3c2y32x32.nd2", timedelta(milliseconds=1)),
+        # Legacy file (no OME metadata) still exposes its experiment loop.
+        ("ND2_aryeh_but3_cont200-1.nd2", timedelta(minutes=15)),
+        # Files without a time loop report no interval.
+        ("ND2_dims_c2y32x32.nd2", None),
+        ("ND2_maxime_BF007.nd2", None),
+    ],
+)
+def test_time_interval(
+    filename: str,
+    expected_interval: object,
+) -> None:
+    rdr = Reader(LOCAL_RESOURCES_DIR / filename)
+
+    assert rdr.time_interval == expected_interval
+
+
+@pytest.mark.parametrize(
+    "filename, expected_t, expected_space",
+    [
+        # Time-lapse with OME metadata: seconds on T, microns on ZYX.
+        (
+            "ND2_jonas_header_test2.nd2",
+            ("time", "second"),
+            "micrometer",
+        ),
+        # No time loop: T carries no type/unit; ZYX still microns.
+        (
+            "ND2_dims_c2y32x32.nd2",
+            (None, None),
+            "micrometer",
+        ),
+        # Legacy file: no OME metadata, so units fall back to None while the
+        # semantic types are still derived from the (present) scale.
+        (
+            "ND2_aryeh_but3_cont200-1.nd2",
+            ("time", None),
+            None,
+        ),
+    ],
+)
+def test_dimension_properties(
+    filename: str,
+    expected_t: Tuple[object, object],
+    expected_space: object,
+) -> None:
+    rdr = Reader(LOCAL_RESOURCES_DIR / filename)
+
+    dp = rdr.dimension_properties
+
+    expected_t_type, expected_t_unit = expected_t
+    assert dp.T.type == expected_t_type
+    assert (str(dp.T.unit) if dp.T.unit is not None else None) == expected_t_unit
+
+    # Channels never carry a spatial/temporal unit.
+    assert dp.C.type is None
+    assert dp.C.unit is None
+
+    for axis in (dp.Z, dp.Y, dp.X):
+        assert axis.type == "space"
+        assert (str(axis.unit) if axis.unit is not None else None) == expected_space
 
 
 @pytest.mark.parametrize(

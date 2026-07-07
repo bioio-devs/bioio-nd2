@@ -1,6 +1,7 @@
 import logging
 import re
 from contextlib import contextmanager
+from datetime import timedelta
 from itertools import product
 from numbers import Integral
 from typing import Any, Dict, Iterator, Optional, Tuple, cast
@@ -305,6 +306,120 @@ class Reader(reader.Reader):
         """
         with self._open_nd2() as rdr:
             return types.PhysicalPixelSizes(*rdr.voxel_size()[::-1])
+
+    @staticmethod
+    def _time_period_ms(experiment: list) -> Optional[float]:
+        """
+        Extract the inter-frame time interval, in milliseconds, from an ND2
+        experiment's time loop.
+
+        Parameters
+        ----------
+        experiment: list
+            The ND2 experiment loops, as returned by `nd2.ND2File.experiment`.
+
+        Returns
+        -------
+        period_ms: Optional[float]
+            The interval in milliseconds, or None when there is no time loop with
+            a single well-defined interval.
+        """
+        for loop in experiment:
+            if isinstance(loop, nd2.structures.TimeLoop):
+                return loop.parameters.periodMs
+            if isinstance(loop, nd2.structures.NETimeLoop):
+                periods = loop.parameters.periods
+                if len(periods) == 1:
+                    return periods[0].periodMs
+        return None
+
+    @property
+    def time_interval(self) -> types.TimeInterval:
+        """
+        Returns
+        -------
+        interval: TimeInterval
+            The time between frames for dimension T as a ``datetime.timedelta``,
+            read from the ND2 experiment's time loop. ``None`` when the file has
+            no time loop with a single well-defined interval.
+        """
+        with self._fs.open(self._path, "rb") as f:
+            with nd2.ND2File(f) as rdr:
+                period_ms = self._time_period_ms(rdr.experiment)
+
+        if period_ms is None or period_ms <= 0:
+            return None
+        return timedelta(milliseconds=period_ms)
+
+    @staticmethod
+    def _ome_unit_to_pint(ome_unit: Any) -> Optional[types.Unit]:
+        """
+        Convert an OME unit enum into a `pint.Unit` from the shared BioIO
+        registry.
+
+        Parameters
+        ----------
+        ome_unit: Any
+            An OME unit enum (e.g. `UnitsLength.MICROMETER`), whose `.value` is
+            the unit symbol (`"µm"`, `"s"`) that `bioio_base.types.ureg` parses.
+
+        Returns
+        -------
+        unit: Optional[types.Unit]
+            The corresponding `pint.Unit`, or None if the input is absent or
+            unrecognized.
+        """
+        if ome_unit is None:
+            return None
+        try:
+            return types.ureg(ome_unit.value).units
+        except Exception:
+            return None
+
+    @property
+    def dimension_properties(self) -> types.DimensionProperties:
+        """
+        Per-dimension metadata describing semantic meaning and units.
+        """
+        s = self.scale
+        if not hasattr(nd2.ND2File, "ome_metadata"):
+            return super().dimension_properties
+
+        try:
+            with self._fs.open(self._path, "rb") as f:
+                with nd2.ND2File(f) as rdr:
+                    pixels = rdr.ome_metadata().images[0].pixels
+        except Exception as err:
+            log.warning(f"Failed to read ND2 dimension units from OME metadata: {err}")
+            return super().dimension_properties
+
+        time_unit = self._ome_unit_to_pint(pixels.time_increment_unit)
+        z_unit = self._ome_unit_to_pint(pixels.physical_size_z_unit)
+        y_unit = self._ome_unit_to_pint(pixels.physical_size_y_unit)
+        x_unit = self._ome_unit_to_pint(pixels.physical_size_x_unit)
+
+        return types.DimensionProperties(
+            T=types.DimensionProperty(
+                type="time" if s.T is not None else None,
+                unit=time_unit if s.T is not None else None,
+            ),
+            C=types.DimensionProperty(
+                type="channel" if s.C is not None else None,
+                unit=None,
+            ),
+            Z=types.DimensionProperty(
+                type="space" if s.Z is not None else None,
+                unit=z_unit if s.Z is not None else None,
+            ),
+            Y=types.DimensionProperty(
+                type="space" if s.Y is not None else None,
+                unit=y_unit if s.Y is not None else None,
+            ),
+            X=types.DimensionProperty(
+                type="space" if s.X is not None else None,
+                unit=x_unit if s.X is not None else None,
+            ),
+        )
 
     @property
     def binning(self) -> str | None:
