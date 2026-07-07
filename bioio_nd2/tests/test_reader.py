@@ -216,3 +216,47 @@ def test_frame_metadata(cache: bool) -> None:
     assert isinstance(
         rdr.xarray_data.attrs["unprocessed"]["frame"], nd2.structures.FrameMetadata
     )
+
+
+@pytest.mark.parametrize(
+    "filename, set_scene, dim_specs",
+    [
+        # Single channel selection (drops the C axis).
+        ("ND2_dims_c2y32x32.nd2", 0, [1, slice(None), slice(None)]),
+        # Single-plane collapse across two dims (native order TZCYX).
+        (
+            "ND2_dims_p4z5t3c2y32x32.nd2",
+            1,
+            [1, 0, slice(None), slice(None), slice(None)],
+        ),
+        # Slices with a step + fancy indexing together, on a non-zero scene.
+        (
+            "ND2_dims_p4z5t3c2y32x32.nd2",
+            2,
+            [slice(0, 2), slice(0, 5, 2), [0, 1], slice(None), slice(None)],
+        ),
+        # RGB file (native order TZCYXS): the trailing sample axis must survive.
+        (
+            "ND2_dims_rgb_t3p2c2z3x64y64.nd2",
+            1,
+            [0, slice(None), slice(None), slice(None), slice(None), slice(None)],
+        ),
+    ],
+)
+def test_indexed_read_matches_full_read(
+    filename: str,
+    set_scene: int,
+    dim_specs: list,
+) -> None:
+    """
+    Checks that slice read matches full data slice
+    """
+    uri = LOCAL_RESOURCES_DIR / filename
+
+    reader = Reader(uri)
+    reader.set_scene(set_scene)
+
+    expected = reader.data[tuple(dim_specs)]
+    actual = reader._read_indexed(reader.dims.order, dim_specs)
+
+    np.testing.assert_array_equal(actual, expected)
