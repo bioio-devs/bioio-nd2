@@ -18,6 +18,7 @@ from fsspec.spec import AbstractFileSystem
 from ome_types import OME
 
 from .plates import (
+    PLATE_96,
     Plate,
     WellPosition,
     extract_position_stage_xy_um,
@@ -48,6 +49,10 @@ class Reader(reader.Reader):
         Plate geometry used to assign scene positions to wells.
         If None, no well assignment is performed and row/column
         metadata will be omitted.
+    use_plate_96 : bool
+        Convenience flag — when True, uses the built-in 96-well plate geometry
+        (PLATE_96) without needing to construct a Plate object. Ignored if
+        ``plate`` is provided explicitly. Default: False.
     Raises
     ------
     exceptions.UnsupportedFileFormatError
@@ -72,7 +77,10 @@ class Reader(reader.Reader):
         fs_kwargs: Dict[str, Any] = {},
         *,
         plate: Plate | None = None,
+        use_plate_96: bool = False,
     ):
+        if plate is None and use_plate_96:
+            plate = PLATE_96
         self._plate = plate
 
         self._fs, self._path = io.pathlike_to_fs(
