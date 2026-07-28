@@ -4,7 +4,7 @@ from contextlib import contextmanager
 from datetime import timedelta
 from itertools import product
 from numbers import Integral
-from typing import Any, Dict, Iterator, Optional, Tuple, cast
+from typing import Any, Dict, Iterator, Literal, Optional, Tuple, cast
 
 import nd2
 import numpy as np
@@ -45,14 +45,10 @@ class Reader(reader.Reader):
     fs_kwargs: Dict[str, Any]
         Any specific keyword arguments to pass down to the fsspec created filesystem.
         Default: {}
-    plate : Plate | None
+    plate : Plate | Literal["96"] | None
         Plate geometry used to assign scene positions to wells.
-        If None, no well assignment is performed and row/column
-        metadata will be omitted.
-    use_plate_96 : bool
-        Convenience flag — when True, uses the built-in 96-well plate geometry
-        (PLATE_96) without needing to construct a Plate object. Ignored if
-        ``plate`` is provided explicitly. Default: False.
+        Pass a ``Plate`` object for custom geometry, ``"96"`` to use the
+        built-in 96-well geometry. Default: None.
     Raises
     ------
     exceptions.UnsupportedFileFormatError
@@ -76,10 +72,9 @@ class Reader(reader.Reader):
         image: types.PathLike,
         fs_kwargs: Dict[str, Any] = {},
         *,
-        plate: Plate | None = None,
-        use_plate_96: bool = False,
+        plate: Plate | Literal["96"] | None = None,
     ):
-        if plate is None and use_plate_96:
+        if plate == "96":
             plate = PLATE_96
         self._plate = plate
 
