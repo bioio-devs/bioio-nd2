@@ -180,3 +180,13 @@ def test_nd2_scene_row_and_column(
 
     assert reader.row == expected_row
     assert reader.column == expected_col
+
+
+def test_nd2_plate_96_literal() -> None:
+    """plate="96" should produce the same row/column as plate=PLATE_96."""
+    uri = LOCAL_RESOURCES_DIR / "ND2_dims_p2z5t3-2c4y32x32.nd2"
+    reader_literal = Reader(uri, plate="96")
+    reader_explicit = Reader(uri, plate=PLATE_96)
+
+    assert reader_literal.row == reader_explicit.row
+    assert reader_literal.column == reader_explicit.column

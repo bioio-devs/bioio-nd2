@@ -4,7 +4,7 @@ from contextlib import contextmanager
 from datetime import timedelta
 from itertools import product
 from numbers import Integral
-from typing import Any, Dict, Iterator, Optional, Tuple, cast
+from typing import Any, Dict, Iterator, Literal, Optional, Tuple, cast
 
 import nd2
 import numpy as np
@@ -18,6 +18,7 @@ from fsspec.spec import AbstractFileSystem
 from ome_types import OME
 
 from .plates import (
+    PLATE_96,
     Plate,
     WellPosition,
     extract_position_stage_xy_um,
@@ -44,10 +45,10 @@ class Reader(reader.Reader):
     fs_kwargs: Dict[str, Any]
         Any specific keyword arguments to pass down to the fsspec created filesystem.
         Default: {}
-    plate : Plate | None
+    plate : Plate | Literal["96"] | None
         Plate geometry used to assign scene positions to wells.
-        If None, no well assignment is performed and row/column
-        metadata will be omitted.
+        Pass a ``Plate`` object for custom geometry, ``"96"`` to use the
+        built-in 96-well geometry. Default: None.
     Raises
     ------
     exceptions.UnsupportedFileFormatError
@@ -71,8 +72,10 @@ class Reader(reader.Reader):
         image: types.PathLike,
         fs_kwargs: Dict[str, Any] = {},
         *,
-        plate: Plate | None = None,
+        plate: Plate | Literal["96"] | None = None,
     ):
+        if plate == "96":
+            plate = PLATE_96
         self._plate = plate
 
         self._fs, self._path = io.pathlike_to_fs(
