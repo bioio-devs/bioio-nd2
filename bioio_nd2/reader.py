@@ -561,7 +561,7 @@ class Reader(reader.Reader):
     @property
     def acquisition_times(self) -> Optional[list[dict[str, int | datetime]]]:
         """
-        Return the acquisition time for each frame in the current scene.
+        Return the acquisition time for each frame and channel in the current scene.
 
         Returns
         -------
@@ -586,18 +586,21 @@ class Reader(reader.Reader):
                     if not frame_meta.channels:
                         continue
 
-                    jdn = frame_meta.channels[0].time.absoluteJulianDayNumber
-                    if not jdn:
-                        continue
-
-                    unix_ts = (jdn - _JULIAN_DATE_UNIX_EPOCH) * 86400.0
-                    acq_time = datetime.fromtimestamp(unix_ts, tz=timezone.utc)
-
-                    frame_indices: dict[str, int | datetime] = {
+                    base_indices: dict[str, int | datetime] = {
                         k: v for k, v in indices.items() if k != nd2.AXIS.POSITION
                     }
-                    frame_indices["acquisition_time"] = acq_time
-                    results.append(frame_indices)
+
+                    for c_idx, channel in enumerate(frame_meta.channels):
+                        jdn = channel.time.absoluteJulianDayNumber
+                        if not jdn:
+                            continue
+
+                        unix_ts = (jdn - _JULIAN_DATE_UNIX_EPOCH) * 86400.0
+                        acq_time = datetime.fromtimestamp(unix_ts, tz=timezone.utc)
+
+                        entry = {**base_indices, nd2.AXIS.CHANNEL: c_idx}
+                        entry["acquisition_time"] = acq_time
+                        results.append(entry)
 
             return results or None
 
