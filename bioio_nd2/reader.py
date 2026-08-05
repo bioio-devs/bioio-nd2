@@ -594,9 +594,7 @@ class Reader(reader.Reader):
                     acq_time = datetime.fromtimestamp(unix_ts, tz=timezone.utc)
 
                     frame_indices: dict[str, int | datetime] = {
-                        k: v
-                        for k, v in indices.items()
-                        if k != nd2.AXIS.POSITION
+                        k: v for k, v in indices.items() if k != nd2.AXIS.POSITION
                     }
                     frame_indices["acquisition_time"] = acq_time
                     results.append(frame_indices)
