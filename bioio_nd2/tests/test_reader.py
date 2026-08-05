@@ -243,6 +243,34 @@ def test_time_interval(
 
 
 @pytest.mark.parametrize(
+    "filename, scene, expected_len, expected_keys",
+    [
+        # Time-lapse: one entry per T (C is a frame coord, not a loop axis)
+        ("ND2_dims_t3c2y32x32.nd2", 0, 3, {"T", "acquisition_time"}),
+        # Multi-position with Z and T: 15 frames per scene (5 Z × 3 T)
+        ("ND2_dims_p4z5t3c2y32x32.nd2", 0, 15, {"T", "Z", "acquisition_time"}),
+        # No time loop: single frame, no extra loop keys
+        ("ND2_dims_c2y32x32.nd2", 0, 1, {"acquisition_time"}),
+    ],
+)
+def test_acquisition_times(
+    filename: str,
+    scene: int,
+    expected_len: int,
+    expected_keys: set,
+) -> None:
+    from datetime import datetime
+
+    rdr = Reader(LOCAL_RESOURCES_DIR / filename)
+    rdr.set_scene(scene)
+    times = rdr.acquisition_times
+    assert times is not None
+    assert len(times) == expected_len
+    assert set(times[0].keys()) == expected_keys
+    assert isinstance(times[0]["acquisition_time"], datetime)
+
+
+@pytest.mark.parametrize(
     "filename, expected_t, expected_space",
     [
         # Time-lapse with OME metadata: seconds on T, microns on ZYX.
