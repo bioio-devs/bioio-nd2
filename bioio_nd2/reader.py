@@ -1,7 +1,7 @@
 import logging
 import re
 from contextlib import contextmanager
-from datetime import timedelta
+from datetime import datetime, timedelta, timezone
 from itertools import product
 from numbers import Integral
 from typing import Any, Dict, Iterator, Literal, Optional, Tuple, cast
@@ -29,6 +29,8 @@ from .plates import (
 ###############################################################################
 
 log = logging.getLogger(__name__)
+
+_JULIAN_DATE_UNIX_EPOCH = 2440587.5  # Julian date of 1970-01-01 00:00:00 UTC
 
 ###############################################################################
 
@@ -555,3 +557,55 @@ class Reader(reader.Reader):
             log.warning(f"Failed to patch ND2 objective immersion suffix: {err}")
 
         return metadata
+
+    @property
+    def acquisition_times(self) -> Optional[list[dict[str, int | datetime]]]:
+        """
+        Return the acquisition time for each frame and channel in the current scene.
+
+        Returns
+        -------
+        Optional[list[dict[str, int | datetime]]]
+            A list of dictionaries, each containing dimension indices such as
+            ``{"T": 0, "Z": 0, "C": 0}`` and the corresponding acquisition
+            time under the key ``"acquisition_time"``.  The timezone of the
+            acquisition times is UTC.  Returns ``None`` if extraction fails or
+            no timestamps are present.
+        """
+        try:
+            position = self.current_scene_index
+            results: list[dict[str, int | datetime]] = []
+
+            with self._open_nd2() as rdr:
+                for seq_idx, indices in enumerate(rdr.loop_indices):
+                    frame_position = indices.get(nd2.AXIS.POSITION)
+                    if frame_position is not None and frame_position != position:
+                        continue
+
+                    frame_meta = rdr.frame_metadata(seq_idx)
+                    if not frame_meta.channels:
+                        continue
+
+                    base_indices: dict[str, int | datetime] = {
+                        k: v for k, v in indices.items() if k != nd2.AXIS.POSITION
+                    }
+
+                    for c_idx, channel in enumerate(frame_meta.channels):
+                        jdn = channel.time.absoluteJulianDayNumber
+                        if not jdn:
+                            continue
+
+                        unix_ts = (jdn - _JULIAN_DATE_UNIX_EPOCH) * 86400.0
+                        acq_time = datetime.fromtimestamp(unix_ts, tz=timezone.utc)
+
+                        entry = {**base_indices, nd2.AXIS.CHANNEL: c_idx}
+                        entry["acquisition_time"] = acq_time
+                        results.append(entry)
+
+            return results or None
+
+        except Exception as exc:
+            log.warning(
+                "Failed to extract frame acquisition times: %s", exc, exc_info=True
+            )
+            return None
