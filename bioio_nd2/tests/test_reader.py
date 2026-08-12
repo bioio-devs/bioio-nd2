@@ -15,11 +15,9 @@ from .conftest import LOCAL_RESOURCES_DIR
 
 nd2 = pytest.importorskip("nd2")
 
-# nd2 0.4.3 and above improves detection of position names
-if tuple(int(x) for x in nd2.__version__.split(".")) >= (0, 4, 3):
-    pos_names = ("point name 1", "point name 2", "point name 3", "point name 4")
-else:
-    pos_names = ("XYPos:0", "XYPos:1", "XYPos:2", "XYPos:3")
+# position name detection was improved in nd2 0.4.3, well below the version this
+# package requires
+pos_names = ("point name 1", "point name 2", "point name 3", "point name 4")
 
 
 @pytest.mark.parametrize(
