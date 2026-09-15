@@ -40,6 +40,8 @@ from .conftest import LOCAL_RESOURCES_DIR
                 "Pixel Size Z": 1.0,
                 "Position Index": None,
                 "Row": "4",
+                "Stage Position X": 26950.2,
+                "Stage Position Y": -1801.6,
                 "Timelapse": True,
                 "Timelapse Interval": datetime.timedelta(
                     seconds=18, microseconds=495260
@@ -77,6 +79,8 @@ from .conftest import LOCAL_RESOURCES_DIR
                 "Pixel Size Z": 1.0,
                 "Position Index": None,
                 "Row": "4",
+                "Stage Position X": 26950.2,
+                "Stage Position Y": -1801.6,
                 "Timelapse": True,
                 "Timelapse Interval": datetime.timedelta(
                     seconds=4, microseconds=293375
@@ -116,6 +120,8 @@ from .conftest import LOCAL_RESOURCES_DIR
                 "Pixel Size Z": 0.5,
                 "Position Index": None,
                 "Row": "5",
+                "Stage Position X": -2832.8,
+                "Stage Position Y": 313.0,
                 "Timelapse": False,
                 "Timelapse Interval": None,
                 "Total Time Duration": datetime.timedelta(microseconds=245184),
@@ -180,6 +186,35 @@ def test_nd2_scene_row_and_column(
 
     assert reader.row == expected_row
     assert reader.column == expected_col
+
+
+@pytest.mark.parametrize(
+    "filename, scene_index, expected_x, expected_y",
+    [
+        # Multi-position file with an XYPosLoop: each scene reports its own
+        # recorded stage position.
+        ("ND2_dims_rgb_t3p2c2z3x64y64.nd2", 0, 33644.3, 3908.7),
+        ("ND2_dims_rgb_t3p2c2z3x64y64.nd2", 1, 37772.7, 3292.1),
+        # No XYPosLoop: the stage position is recovered from the events table.
+        ("ND2_maxime_BF007.nd2", 0, 4565.5, -2877.2),
+    ],
+)
+def test_nd2_stage_position(
+    filename: str,
+    scene_index: int,
+    expected_x: float,
+    expected_y: float,
+) -> None:
+    """
+    Stage positions are surfaced per scene, without requiring a plate.
+    """
+    uri = LOCAL_RESOURCES_DIR / filename
+    reader = Reader(uri)
+    reader.set_scene(scene_index)
+
+    metadata = reader.standard_metadata
+    assert metadata.stage_position_x == pytest.approx(expected_x)
+    assert metadata.stage_position_y == pytest.approx(expected_y)
 
 
 def test_nd2_plate_96_literal() -> None:

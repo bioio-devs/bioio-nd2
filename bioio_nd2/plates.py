@@ -253,7 +253,7 @@ def _stage_xy_from_events(
     Recover the stage XY (µm) of a single-position file from the events table.
 
     Used as a fallback when a split file no longer carries an ``XYPosLoop``.
-    Returns the position with the same negated sign convention, or None.
+    Returns the stage position as recorded, or None.
     """
     events = rdr.events()
     if not events:
@@ -271,7 +271,7 @@ def _stage_xy_from_events(
     if x is None or y is None:
         return None
 
-    return (-x, -y)
+    return (x, y)
 
 
 def extract_position_stage_xy_um(
@@ -286,13 +286,14 @@ def extract_position_stage_xy_um(
     Returns
     -------
     Dict[int, Tuple[float, float]]
-        Mapping of ND2 position index → (x_um, y_um)
+        Mapping of ND2 position index → (x_um, y_um), in the stage
+        coordinates recorded in the file.
     """
     for exp in rdr.experiment:
         if "XYPosLoop" in str(exp):
             points = exp.parameters.points
             return {
-                i: (-p.stagePositionUm.x, -p.stagePositionUm.y)
+                i: (p.stagePositionUm.x, p.stagePositionUm.y)
                 for i, p in enumerate(points)
             }
 
@@ -405,9 +406,12 @@ def map_scenes_to_wells(
 
     for scene_index, pos_index in scene_to_position.items():
         x, y = position_xy[pos_index]
+        # The stage axes run opposite to the plate-centered frame that
+        # `Plate.generate_wells` lays well centers out in, so flip the
+        # recorded stage coordinates into that frame before matching.
         mapping[scene_index] = find_closest_well(
-            x,
-            y,
+            -x,
+            -y,
             wells,
             plate=plate,
         )

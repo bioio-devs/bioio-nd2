@@ -526,6 +526,58 @@ class Reader(reader.Reader):
             log.warning("Failed to extract column: %s", exc, exc_info=True)
             return None
 
+    def _stage_position_um(self) -> Optional[Tuple[float, float]]:
+        """
+        Stage XY coordinates (µm) of the current scene, as recorded in the file.
+
+        Returns
+        -------
+        Optional[Tuple[float, float]]
+            The (x_um, y_um) stage position, or None when the file carries no
+            XY position metadata.
+        """
+        try:
+            with self._open_nd2() as rdr:
+                position_xy = extract_position_stage_xy_um(rdr)
+                scene_to_position = extract_scene_to_position_index(
+                    rdr, num_scenes=len(self.scenes)
+                )
+            position_index = scene_to_position.get(self.current_scene_index)
+            if position_index is None:
+                return None
+            return position_xy.get(position_index)
+        except Exception as exc:
+            log.warning("Failed to extract stage position: %s", exc, exc_info=True)
+            return None
+
+    @property
+    def stage_position_x(self) -> Optional[float]:
+        """
+        Stage X position (µm) of the current scene, from the XYPosLoop or the
+        events-table fallback.
+
+        Returns
+        -------
+        Optional[float]
+            The X stage coordinate in microns. Returns None if extraction fails.
+        """
+        xy = self._stage_position_um()
+        return xy[0] if xy is not None else None
+
+    @property
+    def stage_position_y(self) -> Optional[float]:
+        """
+        Stage Y position (µm) of the current scene, from the XYPosLoop or the
+        events-table fallback.
+
+        Returns
+        -------
+        Optional[float]
+            The Y stage coordinate in microns. Returns None if extraction fails.
+        """
+        xy = self._stage_position_um()
+        return xy[1] if xy is not None else None
+
     @property
     def standard_metadata(self) -> StandardMetadata:
         """
@@ -539,6 +591,8 @@ class Reader(reader.Reader):
         metadata.column = self.column
         metadata.binning = self.binning
         metadata.row = self.row
+        metadata.stage_position_x = self.stage_position_x
+        metadata.stage_position_y = self.stage_position_y
 
         # ND2 does not currently support immersion parsing into ome object
         # This can be removed once they do.
