@@ -29,7 +29,7 @@ classifiers = [
 dynamic = ["version"]
 dependencies = [
   "bioio-base>=3.4.0",
-  # remote reading needs nd2 with fsspec support (tlambert03/nd2#292)
+  # nd2 0.12.0 added reading from remote URLs via fsspec
   "nd2[legacy]>=0.12.0",
   "dask[array]>=2021.4.1",
   "fsspec>=2022.8.0",

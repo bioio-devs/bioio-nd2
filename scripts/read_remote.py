@@ -4,9 +4,8 @@
 """
 Read an ND2 straight off a remote file system, without downloading it first.
 
-Requires an `nd2` that can read from remote sources (see
-`bioio_nd2.reader.ND2_SUPPORTS_REMOTE`) and the fsspec implementation for the
-protocol -- `aiohttp` for https://, `s3fs` for s3://.
+Requires `nd2>=0.12.0`, which reads remote URLs via fsspec, and the fsspec
+implementation for the protocol -- `aiohttp` for https://, `s3fs` for s3://.
 """
 
 import sys

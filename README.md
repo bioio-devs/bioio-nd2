@@ -68,8 +68,10 @@ need most of the image, caching a local copy first is faster — prefix the URI 
 `simplecache::` (e.g. `simplecache::s3://bucket/image.nd2`) to have fsspec download
 it once.
 
-Note that a delayed (dask) array built from a remote file keeps that file open, as
-`nd2` cannot reopen a remote source once it has been closed.
+A `Reader` keeps a remote file open for as long as it lives, so the metadata is
+fetched once and delayed (dask) arrays read over the same connection. A delayed
+array that outlives its `Reader` still works; it reopens the file each time it is
+computed.
 
 ## Multi-Well Plate & Well Assignment Support (ND2)
 

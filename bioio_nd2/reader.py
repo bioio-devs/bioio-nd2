@@ -1,6 +1,6 @@
 import logging
 import re
-from contextlib import contextmanager, suppress
+from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from io import BytesIO
 from itertools import product
@@ -101,30 +101,26 @@ class Reader(reader.Reader):
         """
         Return a long-lived ND2File for sources that are not local files.
 
-        `nd2` cannot reopen a remote (or otherwise file-like backed) source once it
-        has been closed, which a delayed read requires: `to_xarray(delayed=True)`
-        hands back an array that reopens the file when it is computed. So a single
-        reader is opened lazily and kept alive for the lifetime of this Reader.
-        That also avoids re-parsing the metadata -- several MB of range requests on
-        a large file -- on every property access.
+        Opening a remote file means fetching and parsing its metadata -- several MB
+        of range requests on a large file -- so rather than repeating that on every
+        property access, a single reader is opened lazily and kept for the lifetime
+        of this Reader. Delayed arrays built from it also compute over this open
+        handle instead of reopening the file for every chunk, which is what `nd2`
+        recommends for remote data. The handle is closed in `__del__`.
 
         Note that `nd2` reads remote files under ~32 MB into memory in full, so
         those stay resident for as long as this Reader does.
         """
         if self._nd2 is None or self._nd2.closed:
             if not isinstance(self._fs, CachingFileSystem):
-                # Prefer the URI over an open handle: `nd2` keeps the storage
-                # options alongside it, so the file survives the pickle round-trip
-                # that a distributed dask scheduler performs. A handle would come
-                # back without credentials.
+                # Hand `nd2` the URI rather than an open handle so that it can open
+                # the file with the block size and caching it tunes for remote
+                # reads. It keeps the storage options alongside, so the file also
+                # survives the pickle round-trip a distributed dask scheduler does.
                 self._nd2 = nd2.ND2File(
                     self._fs.unstrip_protocol(self._path),
                     storage_options=self._fs_kwargs,
                 )
-                # We deliberately own this handle and leave it open; say so, so
-                # that nd2 does not warn about it at garbage collection.
-                with suppress(AttributeError):
-                    self._nd2._rdr._was_open = True
             else:
                 f = self._fs.open(self._path, "rb")
                 try:
@@ -134,6 +130,11 @@ class Reader(reader.Reader):
                     raise
 
         return self._nd2
+
+    def __del__(self) -> None:
+        # Delayed arrays that outlive this Reader reopen the file when computed.
+        if self._nd2 is not None:
+            self._nd2.close()
 
     @contextmanager
     def _open_nd2(self) -> Iterator[nd2.ND2File]:
@@ -314,9 +315,9 @@ class Reader(reader.Reader):
         return subset[local_indexer]
 
     def _xarr_reformat(self, delayed: bool) -> xr.DataArray:
-        # A delayed array reopens the file when it is computed, so it must be built
-        # from a source `nd2` can reopen: a local path, or the persistent reader
-        # `_open_nd2` hands out for everything else.
+        # A delayed array reads through the ND2File it was built from, reopening it
+        # if needed. Build it from the persistent reader `_open_nd2` hands out for
+        # remote sources so that it computes over the already open handle.
         with self._open_nd2() as rdr:
             xarr = rdr.to_xarray(
                 delayed=delayed, squeeze=False, position=self.current_scene_index

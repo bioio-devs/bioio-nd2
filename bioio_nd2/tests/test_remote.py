@@ -120,8 +120,23 @@ def test_remote_delayed_data_matches_local(
 
     delayed = remote.xarray_dask_data
     np.testing.assert_array_equal(delayed.data.compute(), local.data)
-    # a remote source cannot be reopened once closed, so make sure the array is
-    # still usable after a first compute
+    # computing must not have consumed or closed the shared handle
+    np.testing.assert_array_equal(delayed.data.compute(), local.data)
+
+
+def test_remote_delayed_data_outlives_reader(remote_nd2: Tuple[str, dict]) -> None:
+    """Deleting the Reader closes its handle; the array reopens the file itself."""
+    uri, fs_kwargs = remote_nd2
+    remote = Reader(uri, fs_kwargs=fs_kwargs)
+    remote.set_scene(2)
+    local = Reader(LOCAL_RESOURCES_DIR / FILENAME)
+    local.set_scene(2)
+
+    delayed = remote.xarray_dask_data
+    handle = remote._nd2
+    del remote
+    assert handle is not None and handle.closed
+
     np.testing.assert_array_equal(delayed.data.compute(), local.data)
 
 
