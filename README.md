@@ -43,8 +43,8 @@ img.data
 
 ## Reading Remote Files
 
-ND2 files can be read directly from a remote file system, without downloading the
-whole file first. Only the metadata and the planes you ask for are fetched:
+ND2 files can be read directly from a remote file system. Only the metadata and
+the planes you ask for are transferred:
 
 ```python
 from bioio import BioImage
@@ -55,23 +55,13 @@ img = BioImage(
     reader=bioio_nd2.Reader,
     fs_kwargs={"anon": True},  # passed to fsspec, e.g. credentials or endpoint
 )
-
-img.set_scene(0)
-img.get_image_data("ZYX", T=0, C=0)  # only these planes are transferred
+img.get_image_data("ZYX", T=0, C=0)
 ```
 
-This needs the fsspec implementation for the protocol you are using;
-`pip install bioio-nd2[remote]` covers `s3://` and `https://`.
-
-Reading in place is the right choice for a few planes out of a large file. If you
-need most of the image, caching a local copy first is faster — prefix the URI with
-`simplecache::` (e.g. `simplecache::s3://bucket/image.nd2`) to have fsspec download
-it once.
-
-A `Reader` keeps a remote file open for as long as it lives, so the metadata is
-fetched once and delayed (dask) arrays read over the same connection. A delayed
-array that outlives its `Reader` still works; it reopens the file each time it is
-computed.
+`s3://`, `http://` and `https://` work out of the box; other protocols need their
+fsspec backend installed. If you need most of a file, prefix the URI with
+`simplecache::` to download it once instead. A remote file stays open for as long
+as its `Reader` lives.
 
 ## Multi-Well Plate & Well Assignment Support (ND2)
 

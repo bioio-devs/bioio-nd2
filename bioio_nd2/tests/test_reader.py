@@ -15,8 +15,7 @@ from .conftest import LOCAL_RESOURCES_DIR
 
 nd2 = pytest.importorskip("nd2")
 
-# position name detection was improved in nd2 0.4.3, well below the version this
-# package requires
+
 pos_names = ("point name 1", "point name 2", "point name 3", "point name 4")
 
 

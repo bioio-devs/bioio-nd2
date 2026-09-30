@@ -44,12 +44,12 @@ class Reader(reader.Reader):
     Parameters
     ----------
     image : Path or str
-        Path or URI to file.  Remote URIs (e.g. ``s3://bucket/key.nd2``) are read
-        in place: only the metadata and the requested planes are transferred.
+        Path or URI to file. Remote URIs (e.g. ``s3://bucket/key.nd2``) are read
+        in place, transferring only the metadata and the requested planes.
     fs_kwargs: Dict[str, Any]
         Any specific keyword arguments to pass down to the fsspec created filesystem.
-        For remote URIs these double as the storage options handed to ``nd2``
-        (credentials, endpoint overrides, etc.). Default: {}
+        For remote URIs these are also passed to ``nd2`` as storage options.
+        Default: {}
     plate : Plate | Literal["96"] | None
         Plate geometry used to assign scene positions to wells.
         Pass a ``Plate`` object for custom geometry, ``"96"`` to use the
@@ -67,10 +67,8 @@ class Reader(reader.Reader):
 
     @staticmethod
     def _is_supported_image(fs: AbstractFileSystem, path: str, **kwargs: Any) -> bool:
-        # Only the magic number is needed, so fetch it as a byte range: opening a
-        # handle would pull a whole block (megabytes) off a remote file system.
-        # `start` / `end` must be passed by keyword -- s3fs, for one, takes
-        # `version_id` as its second positional argument.
+        # Fetch just the magic number: opening a handle would pull a whole block
+        # (megabytes) off a remote file system. s3fs needs `start`/`end` by keyword.
         if nd2.is_supported_file(BytesIO(fs.cat_file(path, start=0, end=4))):
             return True
         raise exceptions.UnsupportedFileFormatError(
@@ -97,40 +95,6 @@ class Reader(reader.Reader):
 
         self._is_supported_image(self._fs, self._path)
 
-    def _open_persistent_nd2(self) -> nd2.ND2File:
-        """
-        Return a long-lived ND2File for sources that are not local files.
-
-        Opening a remote file means fetching and parsing its metadata -- several MB
-        of range requests on a large file -- so rather than repeating that on every
-        property access, a single reader is opened lazily and kept for the lifetime
-        of this Reader. Delayed arrays built from it also compute over this open
-        handle instead of reopening the file for every chunk, which is what `nd2`
-        recommends for remote data. The handle is closed in `__del__`.
-
-        Note that `nd2` reads remote files under ~32 MB into memory in full, so
-        those stay resident for as long as this Reader does.
-        """
-        if self._nd2 is None or self._nd2.closed:
-            if not isinstance(self._fs, CachingFileSystem):
-                # Hand `nd2` the URI rather than an open handle so that it can open
-                # the file with the block size and caching it tunes for remote
-                # reads. It keeps the storage options alongside, so the file also
-                # survives the pickle round-trip a distributed dask scheduler does.
-                self._nd2 = nd2.ND2File(
-                    self._fs.unstrip_protocol(self._path),
-                    storage_options=self._fs_kwargs,
-                )
-            else:
-                f = self._fs.open(self._path, "rb")
-                try:
-                    self._nd2 = nd2.ND2File(f)
-                except Exception:
-                    f.close()
-                    raise
-
-        return self._nd2
-
     def __del__(self) -> None:
         # Delayed arrays that outlive this Reader reopen the file when computed.
         if self._nd2 is not None:
@@ -144,10 +108,22 @@ class Reader(reader.Reader):
         if isinstance(self._fs, LocalFileSystem):
             with nd2.ND2File(self._path) as rdr:
                 yield rdr
-        else:
-            # Reused across calls and left open on purpose; see
-            # `_open_persistent_nd2`.
-            yield self._open_persistent_nd2()
+            return
+
+        # Remote files stay open for the lifetime of this Reader, since reopening
+        # one re-fetches and re-parses the metadata.
+        if self._nd2 is None:
+            if isinstance(self._fs, CachingFileSystem):
+                # `unstrip_protocol` drops the cache layer, so keep the handle
+                self._nd2 = nd2.ND2File(self._fs.open(self._path, "rb"))
+            else:
+                # Given a URI, `nd2` picks a block size suited to remote reads and
+                # keeps the storage options, so the file survives pickling.
+                self._nd2 = nd2.ND2File(
+                    self._fs.unstrip_protocol(self._path),
+                    storage_options=self._fs_kwargs,
+                )
+        yield self._nd2
 
     @property
     def scenes(self) -> Tuple[str, ...]:
@@ -315,9 +291,6 @@ class Reader(reader.Reader):
         return subset[local_indexer]
 
     def _xarr_reformat(self, delayed: bool) -> xr.DataArray:
-        # A delayed array reads through the ND2File it was built from, reopening it
-        # if needed. Build it from the persistent reader `_open_nd2` hands out for
-        # remote sources so that it computes over the already open handle.
         with self._open_nd2() as rdr:
             xarr = rdr.to_xarray(
                 delayed=delayed, squeeze=False, position=self.current_scene_index
