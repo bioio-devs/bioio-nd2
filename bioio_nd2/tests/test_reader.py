@@ -4,6 +4,7 @@
 from datetime import timedelta
 from typing import Any, List, Tuple, Union
 
+import nd2
 import numpy as np
 import pytest
 from bioio_base import exceptions, test_utilities
@@ -12,9 +13,6 @@ from ome_types import OME
 from bioio_nd2 import Reader
 
 from .conftest import LOCAL_RESOURCES_DIR
-
-nd2 = pytest.importorskip("nd2")
-
 
 pos_names = ("point name 1", "point name 2", "point name 3", "point name 4")
 

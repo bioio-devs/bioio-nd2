@@ -41,28 +41,6 @@ img = BioImage("my_file.nd2", reader=bioio_nd2.Reader)
 img.data
 ```
 
-## Reading Remote Files
-
-ND2 files can be read directly from a remote file system. Only the metadata and
-the planes you ask for are transferred:
-
-```python
-from bioio import BioImage
-import bioio_nd2
-
-img = BioImage(
-    "s3://my-bucket/my_file.nd2",
-    reader=bioio_nd2.Reader,
-    fs_kwargs={"anon": True},  # passed to fsspec, e.g. credentials or endpoint
-)
-img.get_image_data("ZYX", T=0, C=0)
-```
-
-`s3://`, `http://` and `https://` work out of the box; other protocols need their
-fsspec backend installed. If you need most of a file, prefix the URI with
-`simplecache::` to download it once instead. A remote file stays open for as long
-as its `Reader` lives.
-
 ## Multi-Well Plate & Well Assignment Support (ND2)
 
 `bioio-nd2` includes support for mapping ND2 XY stage positions to

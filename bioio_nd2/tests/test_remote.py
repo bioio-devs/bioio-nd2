@@ -1,11 +1,3 @@
-#!/usr/bin/env python
-# -*- coding: utf-8 -*-
-
-"""
-Tests for reading ND2 files from a remote file system, with a moto server standing
-in for S3.
-"""
-
 import os
 from typing import Iterator, Tuple
 

@@ -44,8 +44,7 @@ class Reader(reader.Reader):
     Parameters
     ----------
     image : Path or str
-        Path or URI to file. Remote URIs (e.g. ``s3://bucket/key.nd2``) are read
-        in place, transferring only the metadata and the requested planes.
+        Path or URI to file.
     fs_kwargs: Dict[str, Any]
         Any specific keyword arguments to pass down to the fsspec created filesystem.
         For remote URIs these are also passed to ``nd2`` as storage options.
@@ -67,8 +66,6 @@ class Reader(reader.Reader):
 
     @staticmethod
     def _is_supported_image(fs: AbstractFileSystem, path: str, **kwargs: Any) -> bool:
-        # Fetch just the magic number: opening a handle would pull a whole block
-        # (megabytes) off a remote file system. s3fs needs `start`/`end` by keyword.
         if nd2.is_supported_file(BytesIO(fs.cat_file(path, start=0, end=4))):
             return True
         raise exceptions.UnsupportedFileFormatError(
@@ -110,15 +107,10 @@ class Reader(reader.Reader):
                 yield rdr
             return
 
-        # Remote files stay open for the lifetime of this Reader, since reopening
-        # one re-fetches and re-parses the metadata.
         if self._nd2 is None:
             if isinstance(self._fs, CachingFileSystem):
-                # `unstrip_protocol` drops the cache layer, so keep the handle
                 self._nd2 = nd2.ND2File(self._fs.open(self._path, "rb"))
             else:
-                # Given a URI, `nd2` picks a block size suited to remote reads and
-                # keeps the storage options, so the file survives pickling.
                 self._nd2 = nd2.ND2File(
                     self._fs.unstrip_protocol(self._path),
                     storage_options=self._fs_kwargs,
