@@ -2,6 +2,7 @@ import logging
 import re
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
+from io import BytesIO
 from itertools import product
 from numbers import Integral
 from typing import Any, Dict, Iterator, Literal, Optional, Tuple, cast
@@ -43,9 +44,10 @@ class Reader(reader.Reader):
     Parameters
     ----------
     image : Path or str
-        path to file
+        Path or URI to file.
     fs_kwargs: Dict[str, Any]
         Any specific keyword arguments to pass down to the fsspec created filesystem.
+        For remote URIs these are also passed to ``nd2`` as storage options.
         Default: {}
     plate : Plate | Literal["96"] | None
         Plate geometry used to assign scene positions to wells.
@@ -60,10 +62,11 @@ class Reader(reader.Reader):
     _scene_to_well_map: Dict[int, WellPosition | None] | None = None
     _dims: Optional[Dimensions] = None
     _dtype: Optional[np.dtype] = None
+    _nd2: Optional[nd2.ND2File] = None
 
     @staticmethod
     def _is_supported_image(fs: AbstractFileSystem, path: str, **kwargs: Any) -> bool:
-        if nd2.is_supported_file(path, fs.open):
+        if nd2.is_supported_file(BytesIO(fs.cat_file(path, start=0, end=4))):
             return True
         raise exceptions.UnsupportedFileFormatError(
             "bioio-nd2", path, "File is not supported by ND2."
@@ -85,16 +88,14 @@ class Reader(reader.Reader):
             enforce_exists=True,
             fs_kwargs=fs_kwargs,
         )
-        # Catch non-local file system and non-caching file system
-        if not isinstance(self._fs, LocalFileSystem) and not isinstance(
-            self._fs, CachingFileSystem
-        ):
-            raise ValueError(
-                f"Cannot read ND2 from non-local file system. "
-                f"Received URI: {self._path}, which points to {type(self._fs)}."
-            )
+        self._fs_kwargs = fs_kwargs
 
         self._is_supported_image(self._fs, self._path)
+
+    def __del__(self) -> None:
+        # Delayed arrays that outlive this Reader reopen the file when computed.
+        if self._nd2 is not None:
+            self._nd2.close()
 
     @contextmanager
     def _open_nd2(self) -> Iterator[nd2.ND2File]:
@@ -104,10 +105,17 @@ class Reader(reader.Reader):
         if isinstance(self._fs, LocalFileSystem):
             with nd2.ND2File(self._path) as rdr:
                 yield rdr
-        else:
-            with self._fs.open(self._path, "rb") as f:
-                with nd2.ND2File(f) as rdr:
-                    yield rdr
+            return
+
+        if self._nd2 is None:
+            if isinstance(self._fs, CachingFileSystem):
+                self._nd2 = nd2.ND2File(self._fs.open(self._path, "rb"))
+            else:
+                self._nd2 = nd2.ND2File(
+                    self._fs.unstrip_protocol(self._path),
+                    storage_options=self._fs_kwargs,
+                )
+        yield self._nd2
 
     @property
     def scenes(self) -> Tuple[str, ...]:
@@ -275,23 +283,22 @@ class Reader(reader.Reader):
         return subset[local_indexer]
 
     def _xarr_reformat(self, delayed: bool) -> xr.DataArray:
-        with self._fs.open(self._path, "rb") as f:
-            with nd2.ND2File(f) as rdr:
-                xarr = rdr.to_xarray(
-                    delayed=delayed, squeeze=False, position=self.current_scene_index
+        with self._open_nd2() as rdr:
+            xarr = rdr.to_xarray(
+                delayed=delayed, squeeze=False, position=self.current_scene_index
+            )
+            xarr.attrs[constants.METADATA_UNPROCESSED] = xarr.attrs.pop("metadata")
+            if self.current_scene_index is not None:
+                xarr.attrs[constants.METADATA_UNPROCESSED]["frame"] = (
+                    rdr.frame_metadata(self.current_scene_index)
                 )
-                xarr.attrs[constants.METADATA_UNPROCESSED] = xarr.attrs.pop("metadata")
-                if self.current_scene_index is not None:
-                    xarr.attrs[constants.METADATA_UNPROCESSED]["frame"] = (
-                        rdr.frame_metadata(self.current_scene_index)
-                    )
 
-                # include OME metadata as attrs of returned xarray.DataArray if possible
-                # (not possible with `nd2` version < 0.7.0; see PR #521)
-                try:
-                    xarr.attrs[constants.METADATA_PROCESSED] = self.ome_metadata
-                except NotImplementedError:
-                    pass
+            # include OME metadata as attrs of returned xarray.DataArray if possible
+            # (not possible with `nd2` version < 0.7.0; see PR #521)
+            try:
+                xarr.attrs[constants.METADATA_PROCESSED] = self.ome_metadata
+            except NotImplementedError:
+                pass
 
         return xarr.isel({nd2.AXIS.POSITION: 0}, missing_dims="ignore")
 
@@ -348,9 +355,8 @@ class Reader(reader.Reader):
             read from the ND2 experiment's time loop. ``None`` when the file has
             no time loop with a single well-defined interval.
         """
-        with self._fs.open(self._path, "rb") as f:
-            with nd2.ND2File(f) as rdr:
-                period_ms = self._time_period_ms(rdr.experiment)
+        with self._open_nd2() as rdr:
+            period_ms = self._time_period_ms(rdr.experiment)
 
         if period_ms is None or period_ms <= 0:
             return None
@@ -391,9 +397,8 @@ class Reader(reader.Reader):
             return super().dimension_properties
 
         try:
-            with self._fs.open(self._path, "rb") as f:
-                with nd2.ND2File(f) as rdr:
-                    pixels = rdr.ome_metadata().images[0].pixels
+            with self._open_nd2() as rdr:
+                pixels = rdr.ome_metadata().images[0].pixels
         except Exception as err:
             log.warning(f"Failed to read ND2 dimension units from OME metadata: {err}")
             return super().dimension_properties

@@ -4,6 +4,7 @@
 from datetime import timedelta
 from typing import Any, List, Tuple, Union
 
+import nd2
 import numpy as np
 import pytest
 from bioio_base import exceptions, test_utilities
@@ -13,13 +14,7 @@ from bioio_nd2 import Reader
 
 from .conftest import LOCAL_RESOURCES_DIR
 
-nd2 = pytest.importorskip("nd2")
-
-# nd2 0.4.3 and above improves detection of position names
-if tuple(int(x) for x in nd2.__version__.split(".")) >= (0, 4, 3):
-    pos_names = ("point name 1", "point name 2", "point name 3", "point name 4")
-else:
-    pos_names = ("XYPos:0", "XYPos:1", "XYPos:2", "XYPos:3")
+pos_names = ("point name 1", "point name 2", "point name 3", "point name 4")
 
 
 @pytest.mark.parametrize(
